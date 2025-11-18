@@ -59,9 +59,8 @@ class p_net(nn.Module):
         x = F.relu(self.l1(x.flatten(start_dim=1)))
         x = F.relu(self.l2(x))
         x = F.relu(self.l3(x))
-        p_head = softmax_mask(x)
-        p_head = F.softmax(x,dim=-1) # policy head output
-        v_aux = self.l3(x)           # auxiliary value head output
+        p_head = F.softmax(softmax_mask(x),dim=-1) # policy head output
+        v_aux = self.v_aux(x)                      # auxiliary value head output
         return p_head,v_aux
        
 class v_net(nn.Module):
