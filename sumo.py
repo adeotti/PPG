@@ -6,6 +6,8 @@ from gymnasium.vector import AsyncVectorEnv
 import gymnasium_sudoku
 from dataclasses import dataclass
 import torch.nn.functional as F
+from torch.utils.tensorboard import SummaryWriter
+
 
 @dataclass(frozen=False)
 class Hypers:
@@ -80,7 +82,7 @@ class v_net(nn.Module):
         return F.relu(self.v(x)) 
 
 
-class memory:
+class memory: # data collection class 
     def __init__(self,env:AsyncVectorEnv):
         N = configs.num_env
         B = configs.batchsize 
@@ -133,7 +135,7 @@ class memory:
         self._observation = state 
 
     @torch.compile(mode="reduce-overhead",fullgraph=True)
-    def compute_advantage(self,network,rewards:Tensor,values:Tensor,dones:Tensor):
+    def compute_advantage(self,network,rewards,values,dones): 
         next_state = self.transf_obs(self._observation)
         with torch.amp.autocast(device_type="cuda",dtype=torch.half):
             _,next_value = network(next_state)
@@ -162,20 +164,33 @@ class memory:
 
 
 class main:
-    def init_net(self):
-        # forward
-        # init to device
-        # compile
-        pass
+    def init_nets(self):
+        random = torch.zeros_like(torch.tensor((self.env.reset()[0])))
+        self.p_net(process_obs(random))
+        self.v_net(process_obs(random))
+
+        self.p_net.apply(w_init)
+        self.v_net.apply(w_init)
+
+        self.p_net.compile()
+        self.v_net.compile()
 
     def __init__(self):
+        self.p_net = p_net().to(hypers.device)
+        self.v_net = v_net().to(hypers.device)
+        self.env = env()
+        self.init_nets()
+        self.memory = memory(self.env)
+        self.writter = SummaryWriter("./")
+
+    def save(self):
         pass
 
     def run(self):
         pass
 
 if __name__ == "__main__":
-    None
+    main()
 
 
 
