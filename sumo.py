@@ -94,9 +94,8 @@ class Memory:
         self.advantages = torch.empty((B,N),device=configs.device,dtype=torch.float32) 
 
         self.env = env
-        self.gamma = configs.gamma
-        self._lambda_ = configs.lambda_
-        self.data = []
+        self.gamma = configs.gamma   # fix 
+        self._lambda_ = configs.lambda_ # fix
         self.pointer = 0
         self.finished_reward = deque(maxlen=30)
         self.log_total_steps = deque(maxlen=30)
@@ -104,11 +103,10 @@ class Memory:
         self.total_steps = torch.empty(configs.num_env).float()
           
     @torch.no_grad()
-    def step(self,batchsize,network:network):
+    def step(self,network):
         self.pointer = 0 
         self._observation,_ = self.env.reset()
-        torch.compiler.cudagraph_mark_step_begin()
-        
+        torch.compiler.cudagraph_mark_step_begin() 
         self._observation = self.transf_obs(self._observation)
         with torch.amp.autocast(device_type="cuda",dtype=torch.half):
             policy_output, value = network(self._observation)
@@ -165,17 +163,7 @@ class Memory:
 
 
 if __name__ == "__main__":
-    v = v_net()
-    p = p_net()
-    e = env()
-    d = torch.tensor(e.reset()[0],dtype=torch.float32)
-    print(p(process_obs(d)))
-    # print(n(process_obs(x).unsqueeze(0)).shape)
-
-
-
-    # self.compute_advantage(network,self.rewards,self.values,self.dones)
-
+    None
 
 
 
