@@ -79,6 +79,91 @@ class v_net(nn.Module):
         x = F.relu(self.l2(x))
         return F.relu(self.v(x)) 
 
+
+class Memory:
+    def __init__(self,env:AsyncVectorEnv):
+        N = configs.num_env
+        B = configs.batchsize 
+        self.state = torch.empty((B,N,1,9,9),device=configs.device,dtype=torch.half)
+        self.action = torch.empty((B,N),device=configs.device,dtype=torch.float32)
+        self.values = torch.empty((B,N),device=configs.device,dtype=torch.float32)
+        self.prob = torch.empty((B,N),device=configs.device,dtype=torch.float32) 
+        self.rewards = torch.empty((B,N),device=configs.device,dtype=torch.float32) 
+        self.dones = torch.empty((B,N),device=configs.device,dtype=torch.float32) 
+        self.dist_prob = torch.empty((B,N,3),device=configs.device,dtype=torch.float32) 
+        self.advantages = torch.empty((B,N),device=configs.device,dtype=torch.float32) 
+
+        self.env = env
+        self.gamma = configs.gamma
+        self._lambda_ = configs.lambda_
+        self.data = []
+        self.pointer = 0
+        self.finished_reward = deque(maxlen=30)
+        self.log_total_steps = deque(maxlen=30)
+        self.episode_reward = torch.empty(self.env.num_envs).float()
+        self.total_steps = torch.empty(configs.num_env).float()
+          
+    @torch.no_grad()
+    def step(self,batchsize,network:network):
+        self.pointer = 0 
+        self._observation,_ = self.env.reset()
+        torch.compiler.cudagraph_mark_step_begin()
+        
+        self._observation = self.transf_obs(self._observation)
+        with torch.amp.autocast(device_type="cuda",dtype=torch.half):
+            policy_output, value = network(self._observation)
+        distribution = Categorical(policy_output)
+        action = distribution.sample()
+        prob = distribution.log_prob(action)
+        state,reward,done,_,_ = self.env.step(action.cpu().numpy())
+        for i in range(self.env.num_envs): # tracking episode rewards and total steps
+            self.episode_reward[i] += reward[i] 
+            self.total_steps[i] += 1
+            if done[i]:
+                self.finished_reward.append(self.episode_reward[i])
+                self.log_total_steps.append(self.total_steps[i])
+                self.episode_reward[i] = 0
+                self.total_steps[i] = 0
+        
+        self.state[n].copy_(self._observation)
+        self.action[n].copy_(action)
+        self.values[n].copy_(value)
+        self.prob[n].copy_(prob)
+        self.rewards[n].copy_(torch.as_tensor(reward))
+        self.dones[n].copy_(torch.as_tensor(done))
+        self.dist_prob[n].copy_(distribution.probs)
+        self._observation = state 
+
+    @torch.compile(mode="reduce-overhead",fullgraph=True)
+    def compute_advantage(self,network,rewards:Tensor,values:Tensor,dones:Tensor):
+        next_state = self.transf_obs(self._observation)
+        with torch.amp.autocast(device_type="cuda",dtype=torch.half):
+            _,next_value = network(next_state)
+        _values = torch.cat([values,next_value.unsqueeze(0)])
+        gae = torch.zeros_like(rewards[0], device=configs.device)
+        td = rewards.clone().add_(self.gamma * _values[1:] * (1 - dones)).sub_(_values[:-1])
+        for n in reversed(range(len(rewards))): 
+            gae.mul_(self._lambda_ * self.gamma * (1-dones[n])).add_(td[n])
+            self.advantages[n].copy_(gae)
+         
+    def sample(self,minibatch): 
+        start = self.pointer 
+        end = self.pointer + minibatch 
+        self.pointer = end
+        return (
+            self.state[start:end].flatten(0,1),
+            self.action[start:end],
+            self.values[start:end],
+            self.prob[start:end],
+            self.advantages[start:end],
+            self.dist_prob[start:end]
+        )
+
+    def traj_reward(self):
+        return list(map(torch.tensor,(self.finished_reward,self.log_total_steps)))
+
+
+
 if __name__ == "__main__":
     v = v_net()
     p = p_net()
@@ -86,6 +171,10 @@ if __name__ == "__main__":
     d = torch.tensor(e.reset()[0],dtype=torch.float32)
     print(p(process_obs(d)))
     # print(n(process_obs(x).unsqueeze(0)).shape)
+
+
+
+    # self.compute_advantage(network,self.rewards,self.values,self.dones)
 
 
 
