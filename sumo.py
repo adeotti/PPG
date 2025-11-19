@@ -7,12 +7,20 @@ import gymnasium_sudoku
 from dataclasses import dataclass
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
+from torch.optim import Adam
+from collections import deque
 
 
 @dataclass(frozen=False)
 class Hypers:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_envs = 1
+    batchsize = 1
+    lr = 1
+    gamma = 1
+    lambda_ = 1
+    
+
 
 hypers = Hypers()
 
@@ -84,34 +92,33 @@ class v_net(nn.Module):
 
 class memory: # data collection class 
     def __init__(self,env:AsyncVectorEnv):
-        N = configs.num_env
-        B = configs.batchsize 
-        self.state = torch.empty((B,N,1,9,9),device=configs.device,dtype=torch.half)
-        self.action = torch.empty((B,N),device=configs.device,dtype=torch.float32)
-        self.values = torch.empty((B,N),device=configs.device,dtype=torch.float32)
-        self.prob = torch.empty((B,N),device=configs.device,dtype=torch.float32) 
-        self.rewards = torch.empty((B,N),device=configs.device,dtype=torch.float32) 
-        self.dones = torch.empty((B,N),device=configs.device,dtype=torch.float32) 
-        self.dist_prob = torch.empty((B,N,3),device=configs.device,dtype=torch.float32) 
-        self.advantages = torch.empty((B,N),device=configs.device,dtype=torch.float32) 
+        N = hypers.num_envs
+        B = hypers.batchsize 
+        self.state = torch.empty((B,N,1,9,9),device=hypers.device,dtype=torch.half)
+        self.action = torch.empty((B,N),device=hypers.device,dtype=torch.float32)
+        self.values = torch.empty((B,N),device=hypers.device,dtype=torch.float32)
+        self.prob = torch.empty((B,N),device=hypers.device,dtype=torch.float32) 
+        self.rewards = torch.empty((B,N),device=hypers.device,dtype=torch.float32) 
+        self.dones = torch.empty((B,N),device=hypers.device,dtype=torch.float32) 
+        self.dist_prob = torch.empty((B,N,3),device=hypers.device,dtype=torch.float32) 
+        self.advantages = torch.empty((B,N),device=hypers.device,dtype=torch.float32) 
 
         self.env = env
-        self.gamma = configs.gamma   # fix 
-        self._lambda_ = configs.lambda_ # fix
+        self.gamma = hypers.gamma   
+        self._lambda_ = hypers.lambda_ 
         self.pointer = 0
         self.finished_reward = deque(maxlen=30)
         self.log_total_steps = deque(maxlen=30)
         self.episode_reward = torch.empty(self.env.num_envs).float()
-        self.total_steps = torch.empty(configs.num_env).float()
+        self.total_steps = torch.empty(hypers.num_envs).float()
           
     @torch.no_grad()
     def step(self,network):
         self.pointer = 0 
-        self._observation,_ = self.env.reset()
+        self._observation = self.env.reset()[0]
         torch.compiler.cudagraph_mark_step_begin() 
-        self._observation = self.transf_obs(self._observation)
         with torch.amp.autocast(device_type="cuda",dtype=torch.half):
-            policy_output, value = network(self._observation)
+            policy_output, value = network(process_obs(self._observation))
         distribution = Categorical(policy_output)
         action = distribution.sample()
         prob = distribution.log_prob(action)
@@ -138,7 +145,7 @@ class memory: # data collection class
     def compute_advantage(self,network,rewards,values,dones): 
         next_state = self.transf_obs(self._observation)
         with torch.amp.autocast(device_type="cuda",dtype=torch.half):
-            _,next_value = network(next_state)
+            _,next_value = network(process_obs(next_state))
         _values = torch.cat([values,next_value.unsqueeze(0)])
         gae = torch.zeros_like(rewards[0], device=configs.device)
         td = rewards.clone().add_(self.gamma * _values[1:] * (1 - dones)).sub_(_values[:-1])
@@ -165,7 +172,7 @@ class memory: # data collection class
 
 class main:
     def init_nets(self):
-        random = torch.zeros_like(torch.tensor((self.env.reset()[0])))
+        random = torch.tensor(self.env.reset()[0],device=hypers.device)
         self.p_net(process_obs(random))
         self.v_net(process_obs(random))
 
@@ -181,6 +188,10 @@ class main:
         self.env = env()
         self.init_nets()
         self.memory = memory(self.env)
+        
+        self.p_param = Adam(self.p_net.parameters(),lr=hypers.lr)
+        self.v_param = Adam(self.v_net.parameters(),lr=hypers.lr)
+
         self.writter = SummaryWriter("./")
 
     def save(self):
