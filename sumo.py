@@ -80,7 +80,7 @@ class v_net(nn.Module):
         return F.relu(self.v(x)) 
 
 
-class Memory:
+class memory:
     def __init__(self,env:AsyncVectorEnv):
         N = configs.num_env
         B = configs.batchsize 
@@ -161,6 +161,18 @@ class Memory:
         return list(map(torch.tensor,(self.finished_reward,self.log_total_steps)))
 
 
+class main:
+    def init_net(self):
+        # forward
+        # init to device
+        # compile
+        pass
+
+    def __init__(self):
+        pass
+
+    def run(self):
+        pass
 
 if __name__ == "__main__":
     None
