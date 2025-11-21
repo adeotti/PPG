@@ -252,9 +252,6 @@ class main:
                     vtarget
                     loss_value
 
-                
-                   
-new_values = self.v_net(process_obs(states))
                 for _ in range(hypers.e_aux): # auxiliary phase
                     pass
 
