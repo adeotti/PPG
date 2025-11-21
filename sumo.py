@@ -106,6 +106,7 @@ class memory: # data collection class
         self.advantages = torch.empty((B,N),device=hypers.device,dtype=torch.float32) 
 
         self.env = env
+        self._observation = self.env.reset()[0]
         self.p_net = p_net
         self.v_net = v_net
         self.gamma = hypers.gamma   
@@ -117,18 +118,17 @@ class memory: # data collection class
         self.total_steps = torch.empty(hypers.num_envs).float()
           
     @torch.no_grad()
-    def step(self):
-        self.pointer = 0 
-        self._observation = self.env.reset()[0]
-        torch.compiler.cudagraph_mark_step_begin() 
-        with torch.amp.autocast(device_type="cuda",dtype=torch.half):
-            policy_output,_= self.p_net(process_obs(self._observation))
-            value = self.v_net(process_obs(self._observation))
-
+    def step(self,num_it):
+        policy_output,_= self.p_net(process_obs(self._observation))
+        value = self.v_net(process_obs(self._observation))
         distribution = Categorical(policy_output)
         action = distribution.sample()
         prob = distribution.log_prob(action)
-        state,reward,done,_,_ = self.env.step(action.cpu().numpy())
+        
+        assert torch.equal(action.T.T,action)
+        action = action.T.cpu().numpy()
+        state,reward,done,_,_ = self.env.step(action)
+
         for i in range(self.env.num_envs): # tracking episode rewards and total steps
             self.episode_reward[i] += reward[i] 
             self.total_steps[i] += 1
@@ -137,20 +137,20 @@ class memory: # data collection class
                 self.log_total_steps.append(self.total_steps[i])
                 self.episode_reward[i] = 0
                 self.total_steps[i] = 0
+    
+        self.state[num_it].copy_(torch.as_tensor(self._observation))
+        self.action[num_it].copy_(torch.as_tensor(action))
+        self.values[num_it].copy_(value)
+        self.prob[num_it].copy_(prob)
+        self.rewards[num_it].copy_(torch.as_tensor(reward))
+        self.dones[num_it].copy_(torch.as_tensor(done))
+        self.dist_prob[num_it].copy_(distribution.probs)
+        self._observation = state
         
-        self.state[n].copy_(self._observation)
-        self.action[n].copy_(action)
-        self.values[n].copy_(value)
-        self.prob[n].copy_(prob)
-        self.rewards[n].copy_(torch.as_tensor(reward))
-        self.dones[n].copy_(torch.as_tensor(done))
-        self.dist_prob[n].copy_(distribution.probs)
-        self._observation = state 
 
     # @torch.compile(mode="reduce-overhead",fullgraph=True)
     def compute_advantage(self): 
-        with torch.amp.autocast(device_type="cuda",dtype=torch.half):
-            next_value = self.v_net(process_obs(next_state))
+        next_value = self.v_net(process_obs(next_state))
         _values = torch.cat([self.values,next_value.unsqueeze(0)])
         gae = torch.zeros_like(self.rewards[0], device=configs.device)
         td = self.rewards.clone().add_(self.gamma * _values[1:] * (1 - self.dones)).sub_(_values[:-1])
@@ -177,7 +177,7 @@ class memory: # data collection class
 
 class main:
     def init_nets(self):
-        random = torch.tensor(self.env.reset()[0],device=hypers.device)
+        random = torch.tensor(self.env.reset()[0],device=hypers.device)  
         self.p_net(process_obs(random))
         self.v_net(process_obs(random))
     
@@ -211,8 +211,10 @@ class main:
     def run(self,start=False):
         if start:
             for n in range(hypers.num_games):
-                for _ in range(hypers.batchsize):
-                    self.memory.step()
+                for m in range(hypers.batchsize):
+                    self.memory.step(m)  
+
+                torch.cuda.cudagraph_mark_step_begin()
                 self.memory.compute_advantage() 
                 for _ in range(hypers.batchsize//hypers.minibatch):
                     pass
