@@ -149,9 +149,9 @@ class memory: # data collection class
 
     # @torch.compile(mode="reduce-overhead",fullgraph=True)
     def compute_advantage(self): 
-        next_value = self.v_net(process_obs(self._observation))
-        _values = torch.cat([self.values,next_value.unsqueeze(0)])
-        gae = torch.zeros_like(self.rewards[0], device=configs.device)
+        next_value = self.v_net(process_obs(self._observation)).unsqueeze(0)
+        _values = torch.cat([self.values,next_value]).squeeze(-1)
+        gae = torch.zeros_like(self.rewards[0], device=hypers.device)  
         td = self.rewards.clone().add_(self.gamma * _values[1:] * (1 - self.dones)).sub_(_values[:-1])
         for n in reversed(range(len(self.rewards))): 
             gae.mul_(self._lambda_ * self.gamma * (1-self.dones[n])).add_(td[n])
