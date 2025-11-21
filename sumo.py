@@ -143,7 +143,6 @@ class memory: # data collection class
 
     @torch.compile(mode="reduce-overhead",fullgraph=True)
     def compute_advantage(self,network,rewards,values,dones): 
-        next_state = self.transf_obs(self._observation)
         with torch.amp.autocast(device_type="cuda",dtype=torch.half):
             _,next_value = network(process_obs(next_state))
         _values = torch.cat([values,next_value.unsqueeze(0)])
@@ -189,16 +188,25 @@ class main:
         self.init_nets()
         self.memory = memory(self.env)
         
-        self.p_param = Adam(self.p_net.parameters(),lr=hypers.lr)
-        self.v_param = Adam(self.v_net.parameters(),lr=hypers.lr)
+        self.p_optim = Adam(self.p_net.parameters(),lr=hypers.lr)
+        self.v_optim = Adam(self.v_net.parameters(),lr=hypers.lr)
 
         self.writter = SummaryWriter("./")
 
-    def save(self):
-        pass
+    def save(self,n):
+        data = {
+            "policy state":self.p_net.state_dict(),
+            "policy optim":self.p_optim.state_dict(),
+            "value state":self.v_net.state_dict(),
+            "value optim":self.v_optim.state_dict()
+        }
+        torch.save(data,f"./model-{n}")
 
-    def run(self):
-        pass
+    def run(self,start=False):
+        if start:
+            for n in range(0):
+                pass
+        
 
 if __name__ == "__main__":
     main()
