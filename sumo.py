@@ -96,13 +96,13 @@ class memory: # data collection class
     def __init__(self,env:AsyncVectorEnv,p_net,v_net):
         N = hypers.num_envs
         B = hypers.batchsize 
-        self.state = torch.empty((B,N,1,9,9),device=hypers.device,dtype=torch.half)
-        self.action = torch.empty((B,N),device=hypers.device,dtype=torch.float32)
-        self.values = torch.empty((B,N),device=hypers.device,dtype=torch.float32)
-        self.prob = torch.empty((B,N),device=hypers.device,dtype=torch.float32) 
+        self.state = torch.empty((B,N,9,9),device=hypers.device,dtype=torch.half)
+        self.action = torch.empty((B,3,N),device=hypers.device,dtype=torch.float32)
+        self.values = torch.empty((B,N,1),device=hypers.device,dtype=torch.float32)
+        self.prob = torch.empty((B,N,3),device=hypers.device,dtype=torch.float32) 
         self.rewards = torch.empty((B,N),device=hypers.device,dtype=torch.float32) 
         self.dones = torch.empty((B,N),device=hypers.device,dtype=torch.float32) 
-        self.dist_prob = torch.empty((B,N,3),device=hypers.device,dtype=torch.float32) 
+        self.dist_prob = torch.empty((B,N,3,9),device=hypers.device,dtype=torch.float32) 
         self.advantages = torch.empty((B,N),device=hypers.device,dtype=torch.float32) 
 
         self.env = env
@@ -137,20 +137,19 @@ class memory: # data collection class
                 self.log_total_steps.append(self.total_steps[i])
                 self.episode_reward[i] = 0
                 self.total_steps[i] = 0
-    
-        self.state[num_it].copy_(torch.as_tensor(self._observation))
-        self.action[num_it].copy_(torch.as_tensor(action))
-        self.values[num_it].copy_(value)
+     
+        self.state[num_it].copy_(torch.as_tensor(self._observation)) 
+        self.action[num_it].copy_(torch.as_tensor(action)) 
+        self.values[num_it].copy_(value) 
         self.prob[num_it].copy_(prob)
         self.rewards[num_it].copy_(torch.as_tensor(reward))
-        self.dones[num_it].copy_(torch.as_tensor(done))
+        self.dones[num_it].copy_(torch.as_tensor(done)) 
         self.dist_prob[num_it].copy_(distribution.probs)
-        self._observation = state
-        
+        self._observation = state        
 
     # @torch.compile(mode="reduce-overhead",fullgraph=True)
     def compute_advantage(self): 
-        next_value = self.v_net(process_obs(next_state))
+        next_value = self.v_net(process_obs(self._observation))
         _values = torch.cat([self.values,next_value.unsqueeze(0)])
         gae = torch.zeros_like(self.rewards[0], device=configs.device)
         td = self.rewards.clone().add_(self.gamma * _values[1:] * (1 - self.dones)).sub_(_values[:-1])
@@ -214,7 +213,7 @@ class main:
                 for m in range(hypers.batchsize):
                     self.memory.step(m)  
 
-                torch.cuda.cudagraph_mark_step_begin()
+                torch.compiler.cudagraph_mark_step_begin()
                 self.memory.compute_advantage() 
                 for _ in range(hypers.batchsize//hypers.minibatch):
                     pass
