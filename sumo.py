@@ -14,8 +14,10 @@ from collections import deque
 @dataclass(frozen=False)
 class Hypers:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    num_envs = 1
+    num_envs = 2
+    num_games = 1
     batchsize = 1
+    minibatch = 1
     lr = 1
     gamma = 1
     lambda_ = 1
@@ -37,11 +39,11 @@ def process_obs(x): # -> one hot encoding + mask
     return torch.cat([x,m],dim=1) 
 
 def softmax_mask(x): # action (x,y,z) -> x,y max = 8 and z min = 1
-    x = x.reshape(1,3,9)
+    x = x.reshape(hypers.num_envs,3,9) 
     m = torch.zeros_like(x,dtype=torch.bool)  
-    m[0,0,-1] = True
-    m[0,1,-1] = True
-    m[0,-1,0] = True
+    m[:,0,-1] = True
+    m[:,1,-1] = True
+    m[:,-1,0] = True
     value = -float("inf")
     return torch.masked_fill(x,m,value)
   
@@ -91,7 +93,7 @@ class v_net(nn.Module):
 
 
 class memory: # data collection class 
-    def __init__(self,env:AsyncVectorEnv):
+    def __init__(self,env:AsyncVectorEnv,p_net,v_net):
         N = hypers.num_envs
         B = hypers.batchsize 
         self.state = torch.empty((B,N,1,9,9),device=hypers.device,dtype=torch.half)
@@ -104,6 +106,8 @@ class memory: # data collection class
         self.advantages = torch.empty((B,N),device=hypers.device,dtype=torch.float32) 
 
         self.env = env
+        self.p_net = p_net
+        self.v_net = v_net
         self.gamma = hypers.gamma   
         self._lambda_ = hypers.lambda_ 
         self.pointer = 0
@@ -113,12 +117,14 @@ class memory: # data collection class
         self.total_steps = torch.empty(hypers.num_envs).float()
           
     @torch.no_grad()
-    def step(self,network):
+    def step(self):
         self.pointer = 0 
         self._observation = self.env.reset()[0]
         torch.compiler.cudagraph_mark_step_begin() 
         with torch.amp.autocast(device_type="cuda",dtype=torch.half):
-            policy_output, value = network(process_obs(self._observation))
+            policy_output,_= self.p_net(process_obs(self._observation))
+            value = self.v_net(process_obs(self._observation))
+
         distribution = Categorical(policy_output)
         action = distribution.sample()
         prob = distribution.log_prob(action)
@@ -141,15 +147,15 @@ class memory: # data collection class
         self.dist_prob[n].copy_(distribution.probs)
         self._observation = state 
 
-    @torch.compile(mode="reduce-overhead",fullgraph=True)
-    def compute_advantage(self,network,rewards,values,dones): 
+    # @torch.compile(mode="reduce-overhead",fullgraph=True)
+    def compute_advantage(self): 
         with torch.amp.autocast(device_type="cuda",dtype=torch.half):
-            _,next_value = network(process_obs(next_state))
-        _values = torch.cat([values,next_value.unsqueeze(0)])
-        gae = torch.zeros_like(rewards[0], device=configs.device)
-        td = rewards.clone().add_(self.gamma * _values[1:] * (1 - dones)).sub_(_values[:-1])
-        for n in reversed(range(len(rewards))): 
-            gae.mul_(self._lambda_ * self.gamma * (1-dones[n])).add_(td[n])
+            next_value = self.v_net(process_obs(next_state))
+        _values = torch.cat([self.values,next_value.unsqueeze(0)])
+        gae = torch.zeros_like(self.rewards[0], device=configs.device)
+        td = self.rewards.clone().add_(self.gamma * _values[1:] * (1 - self.dones)).sub_(_values[:-1])
+        for n in reversed(range(len(self.rewards))): 
+            gae.mul_(self._lambda_ * self.gamma * (1-self.dones[n])).add_(td[n])
             self.advantages[n].copy_(gae)
          
     def sample(self,minibatch): 
@@ -174,19 +180,19 @@ class main:
         random = torch.tensor(self.env.reset()[0],device=hypers.device)
         self.p_net(process_obs(random))
         self.v_net(process_obs(random))
-
+    
         self.p_net.apply(w_init)
         self.v_net.apply(w_init)
 
-        self.p_net.compile()
-        self.v_net.compile()
+        # self.p_net.compile()
+        # self.v_net.compile()
 
     def __init__(self):
         self.p_net = p_net().to(hypers.device)
         self.v_net = v_net().to(hypers.device)
         self.env = env()
         self.init_nets()
-        self.memory = memory(self.env)
+        self.memory = memory(self.env,self.p_net,self.v_net)
         
         self.p_optim = Adam(self.p_net.parameters(),lr=hypers.lr)
         self.v_optim = Adam(self.v_net.parameters(),lr=hypers.lr)
@@ -204,12 +210,18 @@ class main:
 
     def run(self,start=False):
         if start:
-            for n in range(0):
-                pass
+            for n in range(hypers.num_games):
+                for _ in range(hypers.batchsize):
+                    self.memory.step()
+                self.memory.compute_advantage() 
+                for _ in range(hypers.batchsize//hypers.minibatch):
+                    pass
+
+                
         
 
 if __name__ == "__main__":
-    main()
+    main().run(start=True)
 
 
 
