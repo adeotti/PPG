@@ -16,11 +16,13 @@ class Hypers:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_envs = 2
     num_games = 1
-    batchsize = 1
-    minibatch = 1
+    batchsize = 15
+    minibatch = 5
+    e_aux = 6
     lr = 1
     gamma = 1
     lambda_ = 1
+    epsilon = 1
     
 
 
@@ -38,8 +40,8 @@ def process_obs(x): # -> one hot encoding + mask
     x = F.one_hot(x,num_classes=10).permute(0,-1,1,2).float() 
     return torch.cat([x,m],dim=1) 
 
-def softmax_mask(x): # action (x,y,z) -> x,y max = 8 and z min = 1
-    x = x.reshape(hypers.num_envs,3,9) 
+def softmax_mask(x): # action (x,y,z) -> x,y max = 8 and z min = 1 
+    x = x.reshape(x.shape[0],3,9) 
     m = torch.zeros_like(x,dtype=torch.bool)  
     m[:,0,-1] = True
     m[:,1,-1] = True
@@ -70,7 +72,7 @@ class p_net(nn.Module):
         x = F.relu(self.c3(x)) 
         x = F.relu(self.l1(x.flatten(start_dim=1)))
         x = F.relu(self.l2(x))
-        x = F.relu(self.l3(x))
+        x = F.relu(self.l3(x)) 
         p_head = F.softmax(softmax_mask(x),dim=-1) # policy head output
         v_aux = self.v_aux(x)                      # auxiliary value head output
         return p_head,v_aux
@@ -128,7 +130,21 @@ class memory: # data collection class
         assert torch.equal(action.T.T,action)
         action = action.T.cpu().numpy()
         state,reward,done,_,_ = self.env.step(action)
-
+next_value = self.v_net(process_obs(self._observation)).unsqueeze(0)
+        print(self.values.shape)
+        print(next_value.shape)
+        _values = torch.cat([self.values,next_value])
+        gae = torch.zeros_like(self.rewards[0], device=hypers.device) 
+        print(self.dones.shape)
+        print(self.rewards.shape)
+        print(_values[1:].shape)
+        print(_values[:-1].shape)
+        td = self.rewards.clone().add_(self.gamma * _values[1:]) #* (1 - self.dones))#.sub_(_values[:-1])
+        sys.exit()
+        for n in reversed(range(len(self.rewards))): 
+            gae.mul_(self._lambda_ * self.gamma * (1-self.dones[n])).add_(td[n])
+            self.advantages[n].copy_(gae)
+         
         for i in range(self.env.num_envs): # tracking episode rewards and total steps
             self.episode_reward[i] += reward[i] 
             self.total_steps[i] += 1
@@ -196,7 +212,7 @@ class main:
         self.p_optim = Adam(self.p_net.parameters(),lr=hypers.lr)
         self.v_optim = Adam(self.v_net.parameters(),lr=hypers.lr)
 
-        self.writter = SummaryWriter("./")
+        # self.writter = SummaryWriter("./")
 
     def save(self,n):
         data = {
@@ -215,7 +231,31 @@ class main:
 
                 torch.compiler.cudagraph_mark_step_begin()
                 self.memory.compute_advantage() 
+
                 for _ in range(hypers.batchsize//hypers.minibatch):
+                    states,actions,values,probs,advantages,dist_prob = self.memory.sample(hypers.minibatch)
+                    
+                    # policy optim  
+                    p_out,_ = self.p_net(process_obs(states)) 
+                    dist = Categorical(probs=p_out)
+                    new_probs = dist.log_prob(actions)
+                    ratio = (new_probs - probs).exp()
+                    p1 = ratio * advantages
+                    p2 = torch.clamp(ratio,1+hypers.epsilon,1-hypers.epsilon) * advantages
+                    loss_policy = - (torch.mean(torch.min(p1,p2)) + (hypers.beta * dist.entropy().mean()))
+                    self.p_optim.zero_grad(set_to_none=True)
+                    loss_policy.backward()
+                    self.p_optim.step()
+
+                    # value optim
+                    new_values = self.v_net(process_obs(states))
+                    vtarget
+                    loss_value
+
+                
+                   
+new_values = self.v_net(process_obs(states))
+                for _ in range(hypers.e_aux): # auxiliary phase
                     pass
 
                 
