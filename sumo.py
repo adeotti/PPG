@@ -9,6 +9,7 @@ import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 from torch.optim import Adam
 from collections import deque
+from torch.distributions.kl import kl_divergence as kl
 
 
 @dataclass(frozen=False)
@@ -23,6 +24,8 @@ class Hypers:
     gamma = 1
     lambda_ = 1
     epsilon = 1
+    beta = 1
+    beta_clone = 1
     
 
 
@@ -101,6 +104,7 @@ class memory: # data collection class
         self.state = torch.empty((B,N,9,9),device=hypers.device,dtype=torch.half)
         self.action = torch.empty((B,3,N),device=hypers.device,dtype=torch.float32)
         self.values = torch.empty((B,N,1),device=hypers.device,dtype=torch.float32)
+        self.values_aux = torch.empty((B,N,1),device=hypers.device,dtype=torch.float32) 
         self.prob = torch.empty((B,N,3),device=hypers.device,dtype=torch.float32) 
         self.rewards = torch.empty((B,N),device=hypers.device,dtype=torch.float32) 
         self.dones = torch.empty((B,N),device=hypers.device,dtype=torch.float32) 
@@ -121,7 +125,7 @@ class memory: # data collection class
           
     @torch.no_grad()
     def step(self,num_it):
-        policy_output,_= self.p_net(process_obs(self._observation))
+        policy_output,v_policy = self.p_net(process_obs(self._observation))
         value = self.v_net(process_obs(self._observation))
         distribution = Categorical(policy_output)
         action = distribution.sample()
@@ -130,21 +134,7 @@ class memory: # data collection class
         assert torch.equal(action.T.T,action)
         action = action.T.cpu().numpy()
         state,reward,done,_,_ = self.env.step(action)
-next_value = self.v_net(process_obs(self._observation)).unsqueeze(0)
-        print(self.values.shape)
-        print(next_value.shape)
-        _values = torch.cat([self.values,next_value])
-        gae = torch.zeros_like(self.rewards[0], device=hypers.device) 
-        print(self.dones.shape)
-        print(self.rewards.shape)
-        print(_values[1:].shape)
-        print(_values[:-1].shape)
-        td = self.rewards.clone().add_(self.gamma * _values[1:]) #* (1 - self.dones))#.sub_(_values[:-1])
-        sys.exit()
-        for n in reversed(range(len(self.rewards))): 
-            gae.mul_(self._lambda_ * self.gamma * (1-self.dones[n])).add_(td[n])
-            self.advantages[n].copy_(gae)
-         
+        
         for i in range(self.env.num_envs): # tracking episode rewards and total steps
             self.episode_reward[i] += reward[i] 
             self.total_steps[i] += 1
@@ -157,6 +147,7 @@ next_value = self.v_net(process_obs(self._observation)).unsqueeze(0)
         self.state[num_it].copy_(torch.as_tensor(self._observation)) 
         self.action[num_it].copy_(torch.as_tensor(action)) 
         self.values[num_it].copy_(value) 
+        self.values_aux[num_it].copy_(v_policy)
         self.prob[num_it].copy_(prob)
         self.rewards[num_it].copy_(torch.as_tensor(reward))
         self.dones[num_it].copy_(torch.as_tensor(done)) 
@@ -181,6 +172,7 @@ next_value = self.v_net(process_obs(self._observation)).unsqueeze(0)
             self.state[start:end].flatten(0,1),
             self.action[start:end],
             self.values[start:end],
+            self.values_aux[start:end],
             self.prob[start:end],
             self.advantages[start:end],
             self.dist_prob[start:end]
@@ -231,14 +223,17 @@ class main:
 
                 torch.compiler.cudagraph_mark_step_begin()
                 self.memory.compute_advantage() 
+                list_v_target = []
+                list_new_dist_probs = []
 
                 for _ in range(hypers.batchsize//hypers.minibatch):
-                    states,actions,values,probs,advantages,dist_prob = self.memory.sample(hypers.minibatch)
+                    states,actions,values,v_policy,probs,advantages,dist_prob = self.memory.sample(hypers.minibatch)
                     
                     # policy optim  
                     p_out,_ = self.p_net(process_obs(states)) 
                     dist = Categorical(probs=p_out)
                     new_probs = dist.log_prob(actions)
+                    list_new_dist_probs.append(new_probs)
                     ratio = (new_probs - probs).exp()
                     p1 = ratio * advantages
                     p2 = torch.clamp(ratio,1+hypers.epsilon,1-hypers.epsilon) * advantages
@@ -250,13 +245,32 @@ class main:
                     # value optim
                     new_values = self.v_net(process_obs(states))
                     vtarget = advantages + values
+                    list_v_target.append(vtarget)
                     loss_value = F.smooth_l1_loss(new_values.squeeze(), v_target)
                     self.v_optim.zero_grad(set_to_none=True)
                     loss_value.backward()
                     self.v_optim.step()
 
-                for _ in range(hypers.e_aux): # auxiliary phase
-                    pass
+                for _ in range(hypers.e_aux): # auxiliary phase : 6 loops 
+                    
+                    for _ in range(hypers.batchsize//hypers.minibatch):
+                        l_aux = F.smooth_l1_loss(v_policy,torch.stack(list_v_target))
+                        l_joint = l_aux + (hypers.beta_clone * kl(dist_prob,torch.stack(list_new_dist_probs)).mean())
+                        self.p_optim.zero_grad(set_to_none=True)
+                        l_joint.backward()
+                        self.p_optim.step()
+
+                    for _ in range(hypers.batchsize//hypers.minibatch):
+                        new_values = self.v_net(process_obs(states))
+                        l_value = F.smooth_l1_loss(new_values, torch.stack(list_v_target))
+                        self.v_optim.zero_grad(set_to_none=True)
+                        l_value.backward()
+                        self.v_optim.step()
+
+
+                        
+
+                    
 
                 
         
