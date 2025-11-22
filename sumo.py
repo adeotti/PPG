@@ -249,8 +249,11 @@ class main:
 
                     # value optim
                     new_values = self.v_net(process_obs(states))
-                    vtarget
-                    loss_value
+                    vtarget = advantages + values
+                    loss_value = F.smooth_l1_loss(new_values.squeeze(), v_target)
+                    self.v_optim.zero_grad(set_to_none=True)
+                    loss_value.backward()
+                    self.v_optim.step()
 
                 for _ in range(hypers.e_aux): # auxiliary phase
                     pass
