@@ -230,18 +230,19 @@ class main:
 
                     for _ in range(hypers.optim_steps): # many passes : N_pi = 32             
                         # policy optim  
-                        p_out,_ = self.p_net(process_obs(states)) 
+                        p_out,_ = self.p_net(process_obs(states))
+                        actions = actions.transpose(1, 2).flatten(0,1) 
                         dist = Categorical(probs=p_out)
-                        new_probs = dist.log_prob(actions)
-                        list_new_dist_probs.append(new_probs)
-                        ratio = torch.exp(new_probs - probs)
+                        new_probs = dist.log_prob(actions) 
+                        ratio = torch.exp(new_probs - probs.flatten(0,1))
+                        advantages = advantages.flatten().unsqueeze(-1)
                         p1 = ratio * advantages
-                        p2 = torch.clamp(ratio,1+hypers.epsilon,1-hypers.epsilon) * advantages
+                        p2 = torch.clamp(ratio,1+hypers.epsilon,1-hypers.epsilon) * advantages 
                         loss_policy = - (torch.mean(torch.min(p1,p2)) + (hypers.beta * dist.entropy().mean()))
                         self.p_optim.zero_grad(set_to_none=True)
                         loss_policy.backward()
                         self.p_optim.step()
-
+      
                         # value optim
                         new_values = self.v_net(process_obs(states))
                         vtarget = advantages + values
