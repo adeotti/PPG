@@ -20,7 +20,7 @@ class Hypers:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_envs = 2
     num_games = 1
-    batchsize = 15
+    batchsize = 20
     minibatch = 5
     e_aux = 6
     lr = 1
@@ -29,10 +29,8 @@ class Hypers:
     epsilon = 1
     beta = 1
     beta_clone = 1
-    optim_steps = 3
+    optim_steps = 3 # defualt 32 as seen in the original paper
     
-
-
 hypers = Hypers()
 
 def env():
@@ -101,7 +99,7 @@ class v_net(nn.Module):
         return self.v(x) 
 
 
-class memory: # data collection class 
+class memory: # Replay buffer class
     def __init__(self,env:AsyncVectorEnv,p_net,v_net):
         N = hypers.num_envs
         B = hypers.batchsize 
@@ -171,7 +169,8 @@ class memory: # data collection class
     
     @torch.no_grad()
     def sample(self,minibatch): # with random sampling
-        idx = torch.randperm(hypers.batchsize)[:hypers.minibatch]  
+        idx = torch.randperm(hypers.batchsize)[:hypers.minibatch] 
+      
         return (
             self.state[idx].flatten(0,1),
             self.action[idx],
@@ -180,7 +179,11 @@ class memory: # data collection class
             self.prob[idx],
             self.advantages[idx],
             self.dist_prob[idx]
-        ) 
+        )
+
+    def update_prob(self,x): # update prob before starting the auxiliary trianing phase
+        x = x.reshape(hypers.batchsize,hypers.num_envs,3)
+        self.prob = x
        
     def traj_reward(self):
         return list(map(torch.tensor,(self.finished_reward,self.log_total_steps)))
@@ -225,7 +228,8 @@ class main:
                     self.memory.step(m)  
 
                 torch.compiler.cudagraph_mark_step_begin()
-                self.memory.compute_advantage() 
+                self.memory.compute_advantage()
+                frozen_probs = []
             
                 for _ in range(hypers.batchsize//hypers.minibatch):
                     states,actions,values,v_policy,probs,advantages,dist_prob = self.memory.sample(hypers.minibatch)
@@ -233,10 +237,12 @@ class main:
                     advantages = advantages.flatten().unsqueeze(-1)
                     processed_obs = process_obs(states)
                  
-                    for _ in range(hypers.optim_steps): # many passes : N_pi = 32             
+                    for r in range(hypers.optim_steps): # many passes : N_pi = 32             
                         p_out,_ = self.p_net(processed_obs) 
                         dist = Categorical(probs=p_out)
-                        new_probs = dist.log_prob(actions) 
+                        new_probs = dist.log_prob(actions)
+                        if r == 0:
+                            frozen_probs.append(new_probs)
                         ratio = torch.exp(new_probs - probs.flatten(0,1)) 
                         p1 = ratio * advantages
                         p2 = torch.clamp(ratio,1+hypers.epsilon,1-hypers.epsilon) * advantages 
@@ -251,11 +257,11 @@ class main:
                         loss.backward()
                         self.optim.step()
       
-                frozen_policy = new_probs.detach() 
+                frozen_probs = torch.stack(frozen_probs)
+                self.memory.update_prob(frozen_probs)
 
-                for _ in range(hypers.e_aux): # auxiliary phase : 6 loops as seen in page 14 of the paper
-                    for _ in range(hypers.batchsize//hypers.minibatch):                    
-                        p_out = self.p_net(states)
+                for _ in range(hypers.e_aux): # auxiliary phase 
+                    for _ in range(hypers.batchsize//hypers.minibatch):                     
 
                         l_aux = F.smooth_l1_loss(v_policy,torch.stack(list_v_target))
                         l_joint = l_aux + (hypers.beta_clone * kl(dist_prob,torch.stack(list_new_dist_probs)).mean())
