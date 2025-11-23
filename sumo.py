@@ -224,19 +224,17 @@ class main:
 
                 torch.compiler.cudagraph_mark_step_begin()
                 self.memory.compute_advantage() 
-                list_v_target = []
-                list_new_dist_probs = []
-
+            
                 for _ in range(hypers.batchsize//hypers.minibatch):
                     states,actions,values,v_policy,probs,advantages,dist_prob = self.memory.sample(hypers.minibatch)
-                  
-                    for _ in range(hypers.optim_steps): # many passes : N_pi = 32
+
+                    for _ in range(hypers.optim_steps): # many passes : N_pi = 32             
                         # policy optim  
                         p_out,_ = self.p_net(process_obs(states)) 
                         dist = Categorical(probs=p_out)
                         new_probs = dist.log_prob(actions)
                         list_new_dist_probs.append(new_probs)
-                        ratio = (new_probs - probs).exp()
+                        ratio = torch.exp(new_probs - probs)
                         p1 = ratio * advantages
                         p2 = torch.clamp(ratio,1+hypers.epsilon,1-hypers.epsilon) * advantages
                         loss_policy = - (torch.mean(torch.min(p1,p2)) + (hypers.beta * dist.entropy().mean()))
@@ -252,28 +250,20 @@ class main:
                         self.v_optim.zero_grad(set_to_none=True)
                         loss_value.backward()
                         self.v_optim.step()
-                      
+                
                 
                 frozen_policy = new_probs.detach() 
 
-                for _ in range(hypers.e_aux): # auxiliary phase : 6 loops 
-                  
-                    for _ in range(hypers.batchsize//hypers.minibatch):
-                        # compute current log probs for kl new_values = self.v_net(process_obs(states))
-                        l_value = F.smooth_l1_loss(new_values, torch.stack(list_v_target))
-                        self.v_optim.zero_grad(set_to_none=True)
-                        l_value.backward()
-                        self.v_optim.step()
+                for _ in range(hypers.e_aux): # auxiliary phase : 6 loops as seen in page 14 of the paper
+                    for _ in range(hypers.batchsize//hypers.minibatch):                    
                         p_out = self.p_net(states)
 
-                        # optimizing l_joint 
                         l_aux = F.smooth_l1_loss(v_policy,torch.stack(list_v_target))
                         l_joint = l_aux + (hypers.beta_clone * kl(dist_prob,torch.stack(list_new_dist_probs)).mean())
                         self.p_optim.zero_grad(set_to_none=True)
                         l_joint.backward()
                         self.p_optim.step()
                         
-                        # optimizing l_value
                         new_values = self.v_net(process_obs(states))
                         l_value = F.smooth_l1_loss(new_values, torch.stack(list_v_target))
                         self.v_optim.zero_grad(set_to_none=True)
@@ -281,21 +271,8 @@ class main:
                         self.v_optim.step()
 
 
-                        
-
-                    
-
-                
-        
-
 if __name__ == "__main__":
     main().run(start=True)
-
-
-
-
-
-
 
 
 
