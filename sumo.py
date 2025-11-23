@@ -10,6 +10,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.optim import Adam
 from collections import deque
 from torch.distributions.kl import kl_divergence as kl
+from itertools import chain
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -28,7 +29,7 @@ class Hypers:
     epsilon = 1
     beta = 1
     beta_clone = 1
-    optim_steps = 1
+    optim_steps = 3
     
 
 
@@ -158,6 +159,7 @@ class memory: # data collection class
         self._observation = state        
 
     #@torch.compile(mode="reduce-overhead",fullgraph=True,)
+    @torch.no_grad()
     def compute_advantage(self): 
         next_value = self.v_net(process_obs(self._observation)).unsqueeze(0)
         _values = torch.cat([self.values,next_value]).squeeze(-1)
@@ -166,13 +168,14 @@ class memory: # data collection class
         for n in reversed(range(len(self.rewards))): 
             gae.mul_(self._lambda_ * self.gamma * (1-self.dones[n])).add_(td[n])
             self.advantages[n].copy_(gae)
-         
+    
+    @torch.no_grad()
     def sample(self,minibatch): # with random sampling
         idx = torch.randperm(hypers.batchsize)[:hypers.minibatch]  
         return (
             self.state[idx].flatten(0,1),
             self.action[idx],
-            self.values[idx],
+            self.values[idx].flatten(0,1),
             self.values_aux[idx],
             self.prob[idx],
             self.advantages[idx],
@@ -201,10 +204,9 @@ class main:
         self.env = env() 
         self.init_nets()
         self.memory = memory(self.env,self.p_net,self.v_net)
-        
-        self.p_optim = Adam(self.p_net.parameters(),lr=hypers.lr)
-        self.v_optim = Adam(self.v_net.parameters(),lr=hypers.lr)
-
+        self.optim = Adam(
+                chain(self.p_net.parameters(),self.v_net.parameters()),lr=hypers.lr
+        )    
         # self.writter = SummaryWriter("./")
 
     def save(self,n):
@@ -227,32 +229,28 @@ class main:
             
                 for _ in range(hypers.batchsize//hypers.minibatch):
                     states,actions,values,v_policy,probs,advantages,dist_prob = self.memory.sample(hypers.minibatch)
-
+                    actions = actions.transpose(1, 2).flatten(0,1)
+                    advantages = advantages.flatten().unsqueeze(-1)
+                    processed_obs = process_obs(states)
+                 
                     for _ in range(hypers.optim_steps): # many passes : N_pi = 32             
-                        # policy optim  
-                        p_out,_ = self.p_net(process_obs(states))
-                        actions = actions.transpose(1, 2).flatten(0,1) 
+                        p_out,_ = self.p_net(processed_obs) 
                         dist = Categorical(probs=p_out)
                         new_probs = dist.log_prob(actions) 
-                        ratio = torch.exp(new_probs - probs.flatten(0,1))
-                        advantages = advantages.flatten().unsqueeze(-1)
+                        ratio = torch.exp(new_probs - probs.flatten(0,1)) 
                         p1 = ratio * advantages
                         p2 = torch.clamp(ratio,1+hypers.epsilon,1-hypers.epsilon) * advantages 
-                        loss_policy = - (torch.mean(torch.min(p1,p2)) + (hypers.beta * dist.entropy().mean()))
-                        self.p_optim.zero_grad(set_to_none=True)
-                        loss_policy.backward()
-                        self.p_optim.step()
-      
-                        # value optim
-                        new_values = self.v_net(process_obs(states))
-                        vtarget = advantages + values
-                        list_v_target.append(vtarget)
+                        loss_policy = - torch.mean(torch.min(p1,p2))
+                              
+                        new_values = self.v_net(processed_obs) 
+                        v_target = advantages + values 
                         loss_value = F.smooth_l1_loss(new_values.squeeze(), v_target)
-                        self.v_optim.zero_grad(set_to_none=True)
-                        loss_value.backward()
-                        self.v_optim.step()
-                
-                
+                        
+                        loss = loss_policy + loss_value - (hypers.beta * dist.entropy().mean())
+                        self.optim.zero_grad(set_to_none=True)
+                        loss.backward()
+                        self.optim.step()
+      
                 frozen_policy = new_probs.detach() 
 
                 for _ in range(hypers.e_aux): # auxiliary phase : 6 loops as seen in page 14 of the paper
