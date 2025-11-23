@@ -10,6 +10,8 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.optim import Adam
 from collections import deque
 from torch.distributions.kl import kl_divergence as kl
+import warnings
+warnings.filterwarnings("ignore")
 
 
 @dataclass(frozen=False)
@@ -26,6 +28,7 @@ class Hypers:
     epsilon = 1
     beta = 1
     beta_clone = 1
+    optim_steps = 1
     
 
 
@@ -90,11 +93,11 @@ class v_net(nn.Module):
         self.v = nn.LazyLinear(1)  
 
     def forward(self,x):
-        x = self.c1(x)
+        x = F.relu(self.c1(x)) 
         x = F.relu(self.c2(x)) # -> torch.Size([n env, 3136])
         x = F.relu(self.l1(x.flatten(start_dim=1)))
         x = F.relu(self.l2(x))
-        return F.relu(self.v(x)) 
+        return self.v(x) 
 
 
 class memory: # data collection class 
@@ -154,7 +157,7 @@ class memory: # data collection class
         self.dist_prob[num_it].copy_(distribution.probs)
         self._observation = state        
 
-    # @torch.compile(mode="reduce-overhead",fullgraph=True)
+    #@torch.compile(mode="reduce-overhead",fullgraph=True,)
     def compute_advantage(self): 
         next_value = self.v_net(process_obs(self._observation)).unsqueeze(0)
         _values = torch.cat([self.values,next_value]).squeeze(-1)
@@ -164,27 +167,25 @@ class memory: # data collection class
             gae.mul_(self._lambda_ * self.gamma * (1-self.dones[n])).add_(td[n])
             self.advantages[n].copy_(gae)
          
-    def sample(self,minibatch): 
-        start = self.pointer 
-        end = self.pointer + minibatch 
-        self.pointer = end
+    def sample(self,minibatch): # with random sampling
+        idx = torch.randperm(hypers.batchsize)[:hypers.minibatch]  
         return (
-            self.state[start:end].flatten(0,1),
-            self.action[start:end],
-            self.values[start:end],
-            self.values_aux[start:end],
-            self.prob[start:end],
-            self.advantages[start:end],
-            self.dist_prob[start:end]
-        )
-
+            self.state[idx].flatten(0,1),
+            self.action[idx],
+            self.values[idx],
+            self.values_aux[idx],
+            self.prob[idx],
+            self.advantages[idx],
+            self.dist_prob[idx]
+        ) 
+       
     def traj_reward(self):
         return list(map(torch.tensor,(self.finished_reward,self.log_total_steps)))
 
 
 class main:
     def init_nets(self):
-        random = torch.tensor(self.env.reset()[0],device=hypers.device)  
+        random = torch.randint(0,9,(self.env.reset()[0].shape))  
         self.p_net(process_obs(random))
         self.v_net(process_obs(random))
     
@@ -197,7 +198,7 @@ class main:
     def __init__(self):
         self.p_net = p_net().to(hypers.device)
         self.v_net = v_net().to(hypers.device)
-        self.env = env()
+        self.env = env() 
         self.init_nets()
         self.memory = memory(self.env,self.p_net,self.v_net)
         
@@ -228,39 +229,51 @@ class main:
 
                 for _ in range(hypers.batchsize//hypers.minibatch):
                     states,actions,values,v_policy,probs,advantages,dist_prob = self.memory.sample(hypers.minibatch)
-                    
-                    # policy optim  
-                    p_out,_ = self.p_net(process_obs(states)) 
-                    dist = Categorical(probs=p_out)
-                    new_probs = dist.log_prob(actions)
-                    list_new_dist_probs.append(new_probs)
-                    ratio = (new_probs - probs).exp()
-                    p1 = ratio * advantages
-                    p2 = torch.clamp(ratio,1+hypers.epsilon,1-hypers.epsilon) * advantages
-                    loss_policy = - (torch.mean(torch.min(p1,p2)) + (hypers.beta * dist.entropy().mean()))
-                    self.p_optim.zero_grad(set_to_none=True)
-                    loss_policy.backward()
-                    self.p_optim.step()
+                  
+                    for _ in range(hypers.optim_steps): # many passes : N_pi = 32
+                        # policy optim  
+                        p_out,_ = self.p_net(process_obs(states)) 
+                        dist = Categorical(probs=p_out)
+                        new_probs = dist.log_prob(actions)
+                        list_new_dist_probs.append(new_probs)
+                        ratio = (new_probs - probs).exp()
+                        p1 = ratio * advantages
+                        p2 = torch.clamp(ratio,1+hypers.epsilon,1-hypers.epsilon) * advantages
+                        loss_policy = - (torch.mean(torch.min(p1,p2)) + (hypers.beta * dist.entropy().mean()))
+                        self.p_optim.zero_grad(set_to_none=True)
+                        loss_policy.backward()
+                        self.p_optim.step()
 
-                    # value optim
-                    new_values = self.v_net(process_obs(states))
-                    vtarget = advantages + values
-                    list_v_target.append(vtarget)
-                    loss_value = F.smooth_l1_loss(new_values.squeeze(), v_target)
-                    self.v_optim.zero_grad(set_to_none=True)
-                    loss_value.backward()
-                    self.v_optim.step()
+                        # value optim
+                        new_values = self.v_net(process_obs(states))
+                        vtarget = advantages + values
+                        list_v_target.append(vtarget)
+                        loss_value = F.smooth_l1_loss(new_values.squeeze(), v_target)
+                        self.v_optim.zero_grad(set_to_none=True)
+                        loss_value.backward()
+                        self.v_optim.step()
+                      
+                
+                frozen_policy = new_probs.detach() 
 
                 for _ in range(hypers.e_aux): # auxiliary phase : 6 loops 
-                    
+                  
                     for _ in range(hypers.batchsize//hypers.minibatch):
+                        # compute current log probs for kl new_values = self.v_net(process_obs(states))
+                        l_value = F.smooth_l1_loss(new_values, torch.stack(list_v_target))
+                        self.v_optim.zero_grad(set_to_none=True)
+                        l_value.backward()
+                        self.v_optim.step()
+                        p_out = self.p_net(states)
+
+                        # optimizing l_joint 
                         l_aux = F.smooth_l1_loss(v_policy,torch.stack(list_v_target))
                         l_joint = l_aux + (hypers.beta_clone * kl(dist_prob,torch.stack(list_new_dist_probs)).mean())
                         self.p_optim.zero_grad(set_to_none=True)
                         l_joint.backward()
                         self.p_optim.step()
-
-                    for _ in range(hypers.batchsize//hypers.minibatch):
+                        
+                        # optimizing l_value
                         new_values = self.v_net(process_obs(states))
                         l_value = F.smooth_l1_loss(new_values, torch.stack(list_v_target))
                         self.v_optim.zero_grad(set_to_none=True)
