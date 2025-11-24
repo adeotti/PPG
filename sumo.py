@@ -11,8 +11,11 @@ from torch.optim import Adam
 from collections import deque
 from torch.distributions.kl import kl_divergence as kl
 from itertools import chain
+from tqdm import tqdm
 import warnings
 warnings.filterwarnings("ignore")
+import os
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 
 @dataclass(frozen=False)
@@ -220,9 +223,8 @@ class main:
     def save(self,n):
         data = {
             "policy state":self.p_net.state_dict(),
-            "policy optim":self.p_optim.state_dict(),
             "value state":self.v_net.state_dict(),
-            "value optim":self.v_optim.state_dict()
+            "value optim":self.optim.state_dict()
         }
         torch.save(data,f"./model-{n}")
 
@@ -243,7 +245,7 @@ class main:
 
     def run(self,start=False):
         if start:
-            for n in range(hypers.max_steps):
+            for n in tqdm(range(hypers.max_steps),total=hypers.max):
                 for m in range(hypers.batchsize):
                     self.memory.step(m)  
 
