@@ -160,7 +160,7 @@ class memory: # Replay buffer class
         self.dist_prob[num_it].copy_(distribution.probs)
         self._observation = state        
 
-    #@torch.compile(mode="reduce-overhead",fullgraph=True,)
+    @torch.compile(mode="reduce-overhead",fullgraph=True,)
     @torch.no_grad()
     def compute_advantage(self): 
         next_value = self.v_net(process_obs(self._observation)).unsqueeze(0)
@@ -245,7 +245,7 @@ class main:
 
     def run(self,start=False):
         if start:
-            for n in tqdm(range(hypers.max_steps),total=hypers.max):
+            for n in tqdm(range(hypers.max_steps),total=hypers.max_steps):
                 for m in range(hypers.batchsize):
                     self.memory.step(m)  
 
