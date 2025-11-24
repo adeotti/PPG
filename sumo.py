@@ -18,18 +18,18 @@ warnings.filterwarnings("ignore")
 @dataclass(frozen=False)
 class Hypers:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    num_envs = 2
-    max_steps = 1
-    batchsize = 20
-    minibatch = 5
+    num_envs = 10
+    max_steps = int(1e6)
+    batchsize = 512
+    minibatch = 16
     e_aux = 6
-    lr = 1
-    gamma = 1
-    lambda_ = 1
-    epsilon = 1
-    beta = 1
-    beta_clone = 1
-    optim_steps = 3 # defualt 32 as seen in the original paper
+    lr = 5e-4
+    gamma = .99
+    lambda_ = .99
+    epsilon = .2
+    beta = 1e-1 # entropy coeff
+    beta_clone = 1 # kl coeff in the aux phase
+    optim_steps = 10 # defualt 32 as seen in the original paper
     
 hypers = Hypers()
 
@@ -203,8 +203,8 @@ class main:
         self.p_net.apply(w_init)
         self.v_net.apply(w_init)
 
-        # self.p_net.compile()
-        # self.v_net.compile()
+        self.p_net.compile()
+        self.v_net.compile()
 
     def __init__(self):
         self.p_net = p_net().to(hypers.device)
@@ -308,8 +308,11 @@ class main:
                         self.writter.add_scalar("auxiliary/loss joint",l_joint)
                         self.writter.add_scalar("auxiliary/loss value",l_value)
 
-                if n%1_00: # reset every 1k steps
+                if n%400: # reset every 400 steps
                     self.env = env()
+
+                if n%10_000:
+                    self.save(n)
 
 
 if __name__ == "__main__":
