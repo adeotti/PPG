@@ -284,16 +284,16 @@ class main:
            
                 for _ in range(hypers.e_aux): # auxiliary phase 
                     for _ in range(hypers.batchsize//hypers.minibatch):   
-                        states,actions,values,v_policy,v_target,probs,advantages,dist_prob = self.process_sample()
-         
+                        states,actions,values,v_policy,v_targets,probs,advantages,dist_prob = self.process_sample()
+                        # -
                         l_v_aux = F.smooth_l1_loss(v_policy,v_target) 
                         p_out,_ = self.p_net(states)
                         new_dist = Categorical(probs=p_out)
                         l_joint = l_v_aux + (hypers.beta_clone * kl(dist_prob,new_dist).mean()) 
-
-                        new_values = self.v_net(process_obs(states))
-                        l_value = F.smooth_l1_loss(new_values, torch.stack(list_v_target))
-                        
+                        # -
+                        new_values = self.v_net(states) 
+                        l_value = F.smooth_l1_loss(new_values,v_targets) 
+                        # -
                         loss_aux = l_joint + l_value
                         self.optim.zero_grad(set_to_none=True)
                         loss_aux.backward()
