@@ -175,11 +175,11 @@ class memory: # Replay buffer class
             self.state[idx].flatten(0,1),
             self.action[idx],
             self.values[idx].flatten(0,1),
-            self.values_aux[idx],
+            self.values_aux[idx].flatten(0,1),
             self.v_target[idx].flatten(0,1),
             self.prob[idx],
             self.advantages[idx],
-            self.dist_prob[idx]
+            self.dist_prob[idx].flatten(0,1)
         )
 
     def update_prob(self,x): # update (replace) the entire probability distribution
@@ -238,7 +238,7 @@ class main:
             v_target,
             probs,
             advantages,
-            dist_prob
+            Categorical(probs=dist_prob)
         )
 
     def run(self,start=False):
@@ -253,9 +253,10 @@ class main:
                 v_target_list = []
             
                 for _ in range(hypers.batchsize//hypers.minibatch):
-                    states,actions,values,_,_,probs,advantages,dist_prob = self.process_sample() 
+                    states,actions,values,_,_,probs,advantages,_ = self.process_sample()
+                    v_target = advantages + values
                  
-                    for r in range(hypers.optim_steps): # sample reuse N_pi = 32  
+                    for _ in range(hypers.optim_steps): # sample reuse N_pi = 32  
                         # -
                         p_out,_ = self.p_net(states) 
                         dist = Categorical(probs=p_out)
@@ -266,7 +267,6 @@ class main:
                         loss_policy = - torch.mean(torch.min(p1,p2))
                         # -
                         new_values = self.v_net(states) 
-                        v_target = advantages + values       
                         loss_value = F.smooth_l1_loss(new_values.squeeze(), v_target)
                         # -
                         loss = loss_policy + loss_value - (hypers.beta * dist.entropy().mean())
@@ -274,9 +274,8 @@ class main:
                         loss.backward()
                         self.optim.step()
 
-                        if r == 0: # data for the auxiliary phase
-                            frozen_probs.append(dist.probs)
-                            v_target_list.append(v_target)
+                    frozen_probs.append(dist.probs)
+                    v_target_list.append(v_target)
 
                 frozen_probs = torch.stack(frozen_probs) 
                 v_targets = torch.stack(v_target_list) 
@@ -286,10 +285,12 @@ class main:
                 for _ in range(hypers.e_aux): # auxiliary phase 
                     for _ in range(hypers.batchsize//hypers.minibatch):   
                         states,actions,values,v_policy,v_target,probs,advantages,dist_prob = self.process_sample()
+         
+                        l_v_aux = F.smooth_l1_loss(v_policy,v_target) 
+                        p_out,_ = self.p_net(states)
+                        new_dist = Categorical(probs=p_out)
+                        l_joint = l_v_aux + (hypers.beta_clone * kl(dist_prob,new_dist).mean()) 
 
-                        l_v_aux = F.smooth_l1_loss(v_policy,v_target)
-                        l_joint = l_aux + (hypers.beta_clone * kl(dist_prob,torch.stack(list_new_dist_probs)).mean())
-                                              
                         new_values = self.v_net(process_obs(states))
                         l_value = F.smooth_l1_loss(new_values, torch.stack(list_v_target))
                         
