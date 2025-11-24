@@ -19,7 +19,7 @@ warnings.filterwarnings("ignore")
 class Hypers:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_envs = 2
-    num_games = 1
+    max_steps = 1
     batchsize = 20
     minibatch = 5
     e_aux = 6
@@ -215,7 +215,7 @@ class main:
         self.optim = Adam(
                 chain(self.p_net.parameters(),self.v_net.parameters()),lr=hypers.lr
         )    
-        # self.writter = SummaryWriter("./")
+        self.writter = SummaryWriter("./")
 
     def save(self,n):
         data = {
@@ -243,7 +243,7 @@ class main:
 
     def run(self,start=False):
         if start:
-            for n in range(hypers.num_games):
+            for n in range(hypers.max_steps):
                 for m in range(hypers.batchsize):
                     self.memory.step(m)  
 
@@ -276,6 +276,11 @@ class main:
 
                     frozen_probs.append(dist.probs)
                     v_target_list.append(v_target)
+                    
+                    self.writter.add_scalar("ppo/Loss policy",loss_policy)
+                    self.writter.add_scalar("ppo/Loss value",loss_value)
+                    self.writter.add_scalar("ppo/total loss",loss)
+                    self.writter.add_scalar("ppo/episode rewards",self.memory.traj_reward()[0].mean())
 
                 frozen_probs = torch.stack(frozen_probs) 
                 v_targets = torch.stack(v_target_list) 
@@ -285,19 +290,26 @@ class main:
                 for _ in range(hypers.e_aux): # auxiliary phase 
                     for _ in range(hypers.batchsize//hypers.minibatch):   
                         states,actions,values,v_policy,v_targets,probs,advantages,dist_prob = self.process_sample()
-                        # -
+                        
                         l_v_aux = F.smooth_l1_loss(v_policy,v_target) 
                         p_out,_ = self.p_net(states)
                         new_dist = Categorical(probs=p_out)
                         l_joint = l_v_aux + (hypers.beta_clone * kl(dist_prob,new_dist).mean()) 
-                        # -
+                      
                         new_values = self.v_net(states) 
                         l_value = F.smooth_l1_loss(new_values,v_targets) 
-                        # -
+                  
                         loss_aux = l_joint + l_value
                         self.optim.zero_grad(set_to_none=True)
                         loss_aux.backward()
                         self.optim.step()
+                        
+                        self.writter.add_scalar("auxiliary/loss aux value",l_v_aux)
+                        self.writter.add_scalar("auxiliary/loss joint",l_joint)
+                        self.writter.add_scalar("auxiliary/loss value",l_value)
+
+                if n%1_00: # reset every 1k steps
+                    self.env = env()
 
 
 if __name__ == "__main__":
