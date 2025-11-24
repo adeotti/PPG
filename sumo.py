@@ -181,7 +181,7 @@ class memory: # Replay buffer class
             self.dist_prob[idx]
         )
 
-    def update_prob(self,x): # update prob before starting the auxiliary trianing phase
+    def update_prob(self,x): # update (replace) the entire log likelikehood place holder 
         x = x.reshape(hypers.batchsize,hypers.num_envs,3)
         self.prob = x
        
@@ -237,7 +237,8 @@ class main:
                     advantages = advantages.flatten().unsqueeze(-1)
                     processed_obs = process_obs(states)
                  
-                    for r in range(hypers.optim_steps): # many passes : N_pi = 32             
+                    for r in range(hypers.optim_steps): # sample reuse N_pi = 32  
+                        # -
                         p_out,_ = self.p_net(processed_obs) 
                         dist = Categorical(probs=p_out)
                         new_probs = dist.log_prob(actions)
@@ -247,7 +248,8 @@ class main:
                         p1 = ratio * advantages
                         p2 = torch.clamp(ratio,1+hypers.epsilon,1-hypers.epsilon) * advantages 
                         loss_policy = - torch.mean(torch.min(p1,p2))
-                              
+                        
+                        # -
                         new_values = self.v_net(processed_obs) 
                         v_target = advantages + values 
                         loss_value = F.smooth_l1_loss(new_values.squeeze(), v_target)
@@ -261,23 +263,23 @@ class main:
                 self.memory.update_prob(frozen_probs)
 
                 for _ in range(hypers.e_aux): # auxiliary phase 
-                    for _ in range(hypers.batchsize//hypers.minibatch):                     
+                    for _ in range(hypers.batchsize//hypers.minibatch):   
+                        states,actions,values,v_policy,probs,advantages,dist_prob = self.memory.sample(hypers.minibatch)
+                        actions = actions.transpose(1, 2).flatten(0,1)
+                        advantages = advantages.flatten().unsqueeze(-1)
+                        processed_obs = process_obs(states)
 
-                        l_aux = F.smooth_l1_loss(v_policy,torch.stack(list_v_target))
+                        l_v_aux = F.smooth_l1_loss(v_policy,torch.stack(list_v_target))
                         l_joint = l_aux + (hypers.beta_clone * kl(dist_prob,torch.stack(list_new_dist_probs)).mean())
-                        self.p_optim.zero_grad(set_to_none=True)
-                        l_joint.backward()
-                        self.p_optim.step()
-                        
+                                              
                         new_values = self.v_net(process_obs(states))
                         l_value = F.smooth_l1_loss(new_values, torch.stack(list_v_target))
-                        self.v_optim.zero_grad(set_to_none=True)
-                        l_value.backward()
-                        self.v_optim.step()
+                        
+                        loss_aux = l_joint + l_value
+                        self.optim.zero_grad(set_to_none=True)
+                        loss_aux.backward()
+                        self.optim.step()
 
 
 if __name__ == "__main__":
     main().run(start=True)
-
-
-
