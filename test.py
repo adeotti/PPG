@@ -56,7 +56,7 @@ for n in range(2_000):
     obs,reward,_,_,_ = env.step(action.numpy())
     env.render()
 
-    if n>0 and n%400 == 0: 
+    if n>0 and n%300 == 0: 
         env = envi()
         obs = env.reset()[0]
         
