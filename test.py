@@ -38,8 +38,9 @@ class p_net(nn.Module):
         x = F.relu(self.c3(x)) 
         x = F.relu(self.l1(x.flatten(start_dim=1)))
         x = F.relu(self.l2(x))
-        x = F.relu(self.l3(x)) 
-        p_head = F.softmax(softmax_mask(x),dim=-1)                   
+        x = self.l3(x) 
+        x = softmax_mask(x)
+        p_head = F.softmax(x,dim=-1)   
         return p_head
 
 model = p_net()
@@ -51,11 +52,11 @@ obs = env.reset()[0]
 
 for n in range(2_000):
     dist = model(process_obs(torch.tensor(obs,dtype=torch.int64).unsqueeze(0)))
-    action = Categorical(logits=dist).sample().squeeze()
+    action = Categorical(probs=dist).sample().squeeze()
     obs,reward,_,_,_ = env.step(action.numpy())
     env.render()
 
-    if n%400 == 0 and n>0: 
+    if n>0 and n%400 == 0: 
         env = envi()
         obs = env.reset()[0]
         
