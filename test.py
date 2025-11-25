@@ -7,7 +7,6 @@ from torch.distributions import Categorical
 env = gym.make("sudoku-v0",render_mode="human")
 
 def process_obs(x): 
-    x = torch.tensor(x,dtype=torch.int64).unsqueeze(0) 
     m = (x == 0).unsqueeze(1).to(torch.float32)
     x = F.one_hot(x,num_classes=10).permute(0,-1,1,2).float() 
     return torch.cat([x,m],dim=1) 
@@ -41,10 +40,11 @@ class p_net(nn.Module):
         p_head = F.softmax(softmax_mask(x),dim=-1)                   
         return p_head
 
-obs = env.reset()[0]
 model = p_net()
+model(process_obs(torch.randint(0,9,(1,9,9))))
+obs = env.reset()[0]
 for _ in range(200):
-    dist = model(process_obs(obs))
+    dist = model(process_obs(torch.tensor(obs,dtype=torch.int64).unsqueeze(0)))
     action = Categorical(logits=dist).sample().squeeze()
     env.step(action.numpy())
     env.render()
