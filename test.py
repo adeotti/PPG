@@ -4,7 +4,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Categorical
 
-env = gym.make("sudoku-v0",render_mode="human")
+def envi():
+    x = gym.make("sudoku-v0",render_mode="human")
+    return x 
 
 def process_obs(x): 
     m = (x == 0).unsqueeze(1).to(torch.float32)
@@ -42,10 +44,19 @@ class p_net(nn.Module):
 
 model = p_net()
 model(process_obs(torch.randint(0,9,(1,9,9))))
+model.load_state_dict(torch.load("./model-10000",map_location="cpu"),strict=False)
+
+env = envi()
 obs = env.reset()[0]
-for _ in range(200):
+
+for n in range(2_000):
     dist = model(process_obs(torch.tensor(obs,dtype=torch.int64).unsqueeze(0)))
     action = Categorical(logits=dist).sample().squeeze()
-    env.step(action.numpy())
+    obs,reward,_,_,_ = env.step(action.numpy())
     env.render()
+
+    if n%400 == 0 and n>0: 
+        env = envi()
+        obs = env.reset()[0]
+        
     
