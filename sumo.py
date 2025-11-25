@@ -1,20 +1,21 @@
-import torch,sys
+import torch,sys,os,warnings,gymnasium_sudoku
+
 import torch.nn as nn
 from torch.distributions import Categorical
+import torch.nn.functional as F
+from torch.optim import Adam
+from torch.utils.tensorboard import SummaryWriter
+from torch.distributions.kl import kl_divergence as kl
+
 import gymnasium as gym
 from gymnasium.vector import AsyncVectorEnv
-import gymnasium_sudoku
+
 from dataclasses import dataclass
-import torch.nn.functional as F
-from torch.utils.tensorboard import SummaryWriter
-from torch.optim import Adam
 from collections import deque
-from torch.distributions.kl import kl_divergence as kl
 from itertools import chain
 from tqdm import tqdm
-import warnings
+
 warnings.filterwarnings("ignore")
-import os
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 
@@ -30,9 +31,9 @@ class Hypers:
     gamma = .99
     lambda_ = .99
     epsilon = .2
-    beta = 1e-1 # entropy coeff
-    beta_clone = 1 # kl coeff in the aux phase
-    optim_steps = 10 # defualt 32 as seen in the original paper
+    beta = 1e-1         # entropy coeff
+    beta_clone = 1      # kl coeff in the aux phase
+    optim_steps = 10    # defualt 32 as seen in the original paper
     
 hypers = Hypers()
 
@@ -133,8 +134,8 @@ class memory: # Replay buffer class
     def step(self,num_it):
         policy_output,v_policy = self.p_net(process_obs(self._observation))
         value = self.v_net(process_obs(self._observation))
-        distribution = Categorical(policy_output)
-        action = distribution.sample()
+        distribution = Categorical(probs=policy_output)
+        action = distribution.sample() ; assert action[-1] != 0
         prob = distribution.log_prob(action)
         
         assert torch.equal(action.T.T,action)
@@ -259,7 +260,6 @@ class main:
                     v_target = advantages + values
                  
                     for _ in range(hypers.optim_steps): # sample reuse N_pi = 32  
-                        # -
                         p_out,_ = self.p_net(states) 
                         dist = Categorical(probs=p_out)
                         new_probs = dist.log_prob(actions)
@@ -267,10 +267,10 @@ class main:
                         p1 = ratio * advantages
                         p2 = torch.clamp(ratio,1+hypers.epsilon,1-hypers.epsilon) * advantages 
                         loss_policy = - torch.mean(torch.min(p1,p2))
-                        # -
+                   
                         new_values = self.v_net(states) 
                         loss_value = F.smooth_l1_loss(new_values.squeeze(), v_target)
-                        # -
+                   
                         loss = loss_policy + loss_value - (hypers.beta * dist.entropy().mean())
                         self.optim.zero_grad(set_to_none=True)
                         loss.backward()
@@ -310,10 +310,10 @@ class main:
                         self.writter.add_scalar("auxiliary/loss joint",l_joint)
                         self.writter.add_scalar("auxiliary/loss value",l_value)
 
-                if n%400: # reset every 400 steps
+                if n%400 == 0: # reset every 400 steps
                     self.env = env()
 
-                if n%10_000:
+                if n%5_000 == 0:
                     self.save(n)
 
 
