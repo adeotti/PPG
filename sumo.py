@@ -21,6 +21,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 @dataclass(frozen=False)
 class Hypers:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    horizon = 300
     num_envs = 10
     max_steps = int(1e6)
     batchsize = 512
@@ -38,7 +39,7 @@ hypers = Hypers()
 
 def env():
     def fn():
-        x = gym.make("sudoku-v0")
+        x = gym.make("sudoku-v0",horizon=hypers.horizon)
         return x 
     return AsyncVectorEnv([fn for _ in range(hypers.num_envs)])
 
@@ -138,7 +139,7 @@ class memory: # Replay buffer class
         policy_output,v_policy,_ = self.p_net(process_obs(self._observation))
         value = self.v_net(process_obs(self._observation))
         distribution = Categorical(probs=policy_output)
-        action = distribution.sample() ; assert not torch.equal(action[-1], torch.tensor([0]))
+        action = distribution.sample() 
         prob = distribution.log_prob(action)
         
         assert torch.equal(action.T.T,action)
@@ -232,7 +233,7 @@ class main:
         }
         torch.save(data,f"./model-{n}")
 
-    def process_sample(self): # sample and process parts of the sample
+    def process_sample(self): # sample and process some items of the sample
         states,actions,values,v_policy,v_target,probs,advantages,dist_prob = self.memory.sample(hypers.minibatch)
         actions = actions.transpose(1, 2).flatten(0,1)
         advantages = advantages.flatten().unsqueeze(-1)
@@ -320,10 +321,7 @@ class main:
                         self.writter.add_scalar("auxiliary/loss joint",l_joint)
                         self.writter.add_scalar("auxiliary/loss value",l_value)
                         #self.writter.add_images("Image",self.norm_attn(attn_w),n)
-
-                if n> 0 and n%300 == 0: # reset every 300 steps 
-                    self.env = env()
-                 
+ 
                 if n%2_000 == 0:
                     self.save(n)
 
