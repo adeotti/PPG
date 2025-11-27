@@ -22,10 +22,10 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 @dataclass(frozen=False)
 class Hypers:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    num_envs = 10
-    max_steps = int(1e6)
-    batchsize = 512
-    minibatch = 16
+    num_envs = 2#10
+    max_steps = 1000#int(1e6)
+    batchsize = 20#512
+    minibatch = 5#16
     e_aux = 6
     lr = 5e-4
     gamma = .99
@@ -33,7 +33,7 @@ class Hypers:
     epsilon = .2
     beta = 1e-1         # entropy coeff
     beta_clone = 1      # kl coeff in the aux phase
-    optim_steps = 10    # defualt 32 as seen in the original paper
+    optim_steps = 1#10    # defualt 32 as seen in the original paper
     
 hypers = Hypers()
 
@@ -64,12 +64,14 @@ def w_init(l):
         nn.init.orthogonal_(l.weight)
         l.bias.fill_(0.0)
 
+
 class p_net(nn.Module):
     def __init__(self):
         super().__init__()
         self.c1 = nn.LazyConv2d(64,1,1)
         self.c2 = nn.LazyConv2d(128,3,1)
         self.c3 = nn.LazyConv2d(128,3,1)
+        self.attn = nn.MultiheadAttention(128,4,batch_first=True)
         self.l1 = nn.LazyLinear(512)
         self.l2 = nn.LazyLinear(256)
         self.l3 = nn.LazyLinear(3*9)
@@ -78,14 +80,16 @@ class p_net(nn.Module):
     def forward(self,x): 
         x = self.c1(x)
         x = F.relu(self.c2(x))
-        x = F.relu(self.c3(x)) 
-        x = F.relu(self.l1(x.flatten(start_dim=1)))
+        x = F.relu(self.c3(x))
+        x = x.flatten(2).transpose(-1,1)
+        x,attn_w = self.attn(x,x,x) 
+        x = F.relu(self.l1(x.flatten(1)))
         x = F.relu(self.l2(x))
         x = F.relu(self.l3(x)) 
         p_head = F.softmax(softmax_mask(x),dim=-1) # policy head output
         v_aux = self.v_aux(x)                      # auxiliary value head output
-        return p_head,v_aux
-       
+        return p_head,v_aux,attn_w
+
 class v_net(nn.Module):
     def __init__(self):
         super().__init__()
@@ -132,10 +136,10 @@ class memory: # Replay buffer class
           
     @torch.no_grad()
     def step(self,num_it):
-        policy_output,v_policy = self.p_net(process_obs(self._observation))
+        policy_output,v_policy,_ = self.p_net(process_obs(self._observation))
         value = self.v_net(process_obs(self._observation))
         distribution = Categorical(probs=policy_output)
-        action = distribution.sample() ; assert action[-1] != 0
+        action = distribution.sample() ; assert not torch.equal(action[-1], torch.tensor([0]))
         prob = distribution.log_prob(action)
         
         assert torch.equal(action.T.T,action)
@@ -161,7 +165,7 @@ class memory: # Replay buffer class
         self.dist_prob[num_it].copy_(distribution.probs)
         self._observation = state        
 
-    @torch.compile(mode="reduce-overhead",fullgraph=True,)
+    #@torch.compile(mode="reduce-overhead",fullgraph=True,)
     @torch.no_grad()
     def compute_advantage(self): 
         next_value = self.v_net(process_obs(self._observation)).unsqueeze(0)
@@ -207,8 +211,8 @@ class main:
         self.p_net.apply(w_init)
         self.v_net.apply(w_init)
 
-        self.p_net.compile()
-        self.v_net.compile()
+        #self.p_net.compile()
+        #self.v_net.compile()
 
     def __init__(self):
         self.p_net = p_net().to(hypers.device)
@@ -244,6 +248,12 @@ class main:
             Categorical(probs=dist_prob)
         )
 
+    def norm_attn(self,x:torch.Tensor): # 
+        x.unsqueeze_(1)
+        amins = x.amin((-2,-1),keepdim=True)
+        amaxs = x.amax((-2,-1),keepdim=True)
+        return (x - amins)/(amaxs - amins)
+
     def run(self,start=False):
         if start:
             for n in tqdm(range(hypers.max_steps),total=hypers.max_steps):
@@ -259,8 +269,8 @@ class main:
                     states,actions,values,_,_,probs,advantages,_ = self.process_sample()
                     v_target = advantages + values
                  
-                    for _ in range(hypers.optim_steps): # sample reuse N_pi = 32  
-                        p_out,_ = self.p_net(states) 
+                    for _ in range(hypers.optim_steps): # sample reuse N_pi = 32
+                        p_out,_,_ = self.p_net(states) 
                         dist = Categorical(probs=p_out)
                         new_probs = dist.log_prob(actions)
                         ratio = torch.exp(new_probs - probs.flatten(0,1)) 
@@ -279,10 +289,10 @@ class main:
                     frozen_probs.append(dist.probs)
                     v_target_list.append(v_target)
                     
-                    self.writter.add_scalar("ppo/Loss policy",loss_policy)
-                    self.writter.add_scalar("ppo/Loss value",loss_value)
-                    self.writter.add_scalar("ppo/total loss",loss)
-                    self.writter.add_scalar("ppo/episode rewards",self.memory.traj_reward()[0].mean())
+                    self.writter.add_scalar("main/Loss policy",loss_policy)
+                    self.writter.add_scalar("main/Loss value",loss_value)
+                    self.writter.add_scalar("main/total loss",loss)
+                    self.writter.add_scalar("main/episode rewards",self.memory.traj_reward()[0].mean())
 
                 frozen_probs = torch.stack(frozen_probs) 
                 v_targets = torch.stack(v_target_list) 
@@ -294,7 +304,8 @@ class main:
                         states,actions,values,v_policy,v_targets,probs,advantages,dist_prob = self.process_sample()
                         
                         l_v_aux = F.smooth_l1_loss(v_policy,v_target) 
-                        p_out,_ = self.p_net(states)
+                        p_out,_,attn_w = self.p_net(states)
+                        sys.exit(self.norm_attn(attn_w).shape)
                         new_dist = Categorical(probs=p_out)
                         l_joint = l_v_aux + (hypers.beta_clone * kl(dist_prob,new_dist).mean()) 
                       
@@ -309,10 +320,12 @@ class main:
                         self.writter.add_scalar("auxiliary/loss aux value",l_v_aux)
                         self.writter.add_scalar("auxiliary/loss joint",l_joint)
                         self.writter.add_scalar("auxiliary/loss value",l_value)
+                        self.norm_attn(attn_w)
+                        self.writter.add_images("Image",attn_w.unsqueeze(1))
 
-                if n%400 == 0: # reset every 400 steps
+                if n> 0 and n%300 == 0: # reset every 300 steps 
                     self.env = env()
-
+                 
                 if n%5_000 == 0:
                     self.save(n)
 
