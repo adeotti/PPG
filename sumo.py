@@ -18,14 +18,13 @@ from tqdm import tqdm
 warnings.filterwarnings("ignore")
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
-
 @dataclass(frozen=False)
 class Hypers:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    num_envs = 2#10
-    max_steps = 1000#int(1e6)
-    batchsize = 20#512
-    minibatch = 5#16
+    num_envs = 10
+    max_steps = int(1e6)
+    batchsize = 512
+    minibatch = 16
     e_aux = 6
     lr = 5e-4
     gamma = .99
@@ -33,7 +32,7 @@ class Hypers:
     epsilon = .2
     beta = 1e-1         # entropy coeff
     beta_clone = 1      # kl coeff in the aux phase
-    optim_steps = 1#10    # defualt 32 as seen in the original paper
+    optim_steps = 10    # defualt 32 as seen in the original paper
     
 hypers = Hypers()
 
@@ -165,7 +164,7 @@ class memory: # Replay buffer class
         self.dist_prob[num_it].copy_(distribution.probs)
         self._observation = state        
 
-    #@torch.compile(mode="reduce-overhead",fullgraph=True,)
+    @torch.compile(mode="reduce-overhead",fullgraph=True,)
     @torch.no_grad()
     def compute_advantage(self): 
         next_value = self.v_net(process_obs(self._observation)).unsqueeze(0)
@@ -211,8 +210,8 @@ class main:
         self.p_net.apply(w_init)
         self.v_net.apply(w_init)
 
-        #self.p_net.compile()
-        #self.v_net.compile()
+        self.p_net.compile()
+        self.v_net.compile()
 
     def __init__(self):
         self.p_net = p_net().to(hypers.device)
@@ -248,8 +247,9 @@ class main:
             Categorical(probs=dist_prob)
         )
 
-    def norm_attn(self,x:torch.Tensor): # 
+    def norm_attn(self,x:torch.Tensor): # norm attention weights for tensorboard 
         x.unsqueeze_(1)
+        x = F.interpolate(x,size=(200,200),mode="nearest")
         amins = x.amin((-2,-1),keepdim=True)
         amaxs = x.amax((-2,-1),keepdim=True)
         return (x - amins)/(amaxs - amins)
@@ -304,8 +304,7 @@ class main:
                         states,actions,values,v_policy,v_targets,probs,advantages,dist_prob = self.process_sample()
                         
                         l_v_aux = F.smooth_l1_loss(v_policy,v_target) 
-                        p_out,_,attn_w = self.p_net(states)
-                        sys.exit(self.norm_attn(attn_w).shape)
+                        p_out,_,attn_w = self.p_net(states) 
                         new_dist = Categorical(probs=p_out)
                         l_joint = l_v_aux + (hypers.beta_clone * kl(dist_prob,new_dist).mean()) 
                       
@@ -320,13 +319,12 @@ class main:
                         self.writter.add_scalar("auxiliary/loss aux value",l_v_aux)
                         self.writter.add_scalar("auxiliary/loss joint",l_joint)
                         self.writter.add_scalar("auxiliary/loss value",l_value)
-                        self.norm_attn(attn_w)
-                        self.writter.add_images("Image",attn_w.unsqueeze(1))
+                        #self.writter.add_images("Image",self.norm_attn(attn_w),n)
 
                 if n> 0 and n%300 == 0: # reset every 300 steps 
                     self.env = env()
                  
-                if n%5_000 == 0:
+                if n%2_000 == 0:
                     self.save(n)
 
 
