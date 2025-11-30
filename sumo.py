@@ -22,8 +22,8 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 class Hypers:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     horizon = 300
-    num_envs = 2#10
-    max_steps = 00#10_000
+    num_envs = 10
+    max_steps = 10_000
     batchsize = 512
     minibatch = 16
     e_aux = 6
@@ -49,15 +49,6 @@ def process_obs(x): # -> one hot encoding + mask
     x = F.one_hot(x,num_classes=10).permute(0,-1,1,2).float() 
     return torch.cat([x,m],dim=1) 
 
-def softmax_mask(x): # action (x,y,z) -> x,y max = 8 and z min = 1 
-    x = x.reshape(x.shape[0],3,9) 
-    m = torch.zeros_like(x,dtype=torch.bool)  
-    m[:,0,-1] = True
-    m[:,1,-1] = True
-    m[:,-1,0] = True
-    value = -float("inf")
-    return torch.masked_fill(x,m,value)
-  
 @torch.no_grad()
 def w_init(l):
     if isinstance(l,(nn.Conv2d,nn.Linear)):
@@ -74,10 +65,9 @@ class p_net(nn.Module):
 
         self.emb = nn.Parameter(torch.zeros(1,81,128))
         self.attn = nn.MultiheadAttention(128,4,batch_first=True)
-        self.pool = nn.AvgPool1d(2)
-
-        self.l1 = nn.LazyLinear(1024)
-        self.l2 = nn.LazyLinear(256)
+        self.l1 = nn.LazyLinear(128)
+        self.l2 = nn.LazyLinear(128)
+ 
         self.l3 = nn.LazyLinear(3*9)
         self.v_aux = nn.LazyLinear(1)    # auxiliary value head
     
@@ -86,16 +76,24 @@ class p_net(nn.Module):
         x = F.relu(self.c2(x))
         x = F.relu(self.c3(x))
         x = x.flatten(2).transpose(-1,1) # -> torch.Size([1,81,128])
+        # -
         x = x + self.emb
-        x,attn_w = self.attn(x,x,x)
-        x = self.pool(x.transpose(-1,1))
-        x = F.relu(self.l1(x.flatten(1)))
+        x,attn_w = self.attn(x,x,x) 
+        x = F.relu(self.l1(x))
         x = F.relu(self.l2(x))
-        x = F.relu(self.l3(x)) 
-        p_head = F.softmax(softmax_mask(x),dim=-1) # policy head output
-        v_aux = self.v_aux(x)                      # auxiliary value head output
+        # -
+        x = F.relu(self.l3(x.mean(1))) 
+        p_head = F.softmax(self.cll_mask(x),dim=-1)  
+        v_aux = self.v_aux(x)                        
         return p_head,v_aux,attn_w
 
+    def cll_mask(self,x): # min(cell value) = 1 
+        x = x.reshape(x.shape[0],3,9) 
+        m = torch.zeros_like(x,dtype=torch.bool)   
+        m[:,-1,0] = True
+        value = -float("inf")
+        return torch.masked_fill(x,m,value)
+        
 
 class v_net(nn.Module):
     def __init__(self):
