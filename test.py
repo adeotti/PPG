@@ -24,11 +24,14 @@ class p_net(nn.Module):
     def __init__(self):
         super().__init__()
         self.c1 = nn.LazyConv2d(64,1,1)
-        self.c2 = nn.LazyConv2d(128,3,1)
-        self.c3 = nn.LazyConv2d(128,3,1)
+        self.c2 = nn.LazyConv2d(128,3,1,padding=1)
+        self.c3 = nn.LazyConv2d(128,3,1,padding=1)
+
+        self.emb = nn.Parameter(torch.zeros(1,81,128))
         self.attn = nn.MultiheadAttention(128,4,batch_first=True)
-        self.l1 = nn.LazyLinear(512)
-        self.l2 = nn.LazyLinear(256)
+        self.l1 = nn.LazyLinear(128)
+        self.l2 = nn.LazyLinear(128)
+ 
         self.l3 = nn.LazyLinear(3*9)
         self.v_aux = nn.LazyLinear(1)    # auxiliary value head
     
@@ -36,18 +39,28 @@ class p_net(nn.Module):
         x = self.c1(x)
         x = F.relu(self.c2(x))
         x = F.relu(self.c3(x))
-        x = x.flatten(2).transpose(-1,1)
+        x = x.flatten(2).transpose(-1,1) # -> torch.Size([1,81,128])
+        
+        x = x + self.emb
         x,attn_w = self.attn(x,x,x) 
-        x = F.relu(self.l1(x.flatten(1)))
+        x = F.relu(self.l1(x))
         x = F.relu(self.l2(x))
-        x = F.relu(self.l3(x)) 
-        p_head = F.softmax(softmax_mask(x),dim=-1) # policy head output
-        v_aux = self.v_aux(x)                      # auxiliary value head output
+        
+        x = F.relu(self.l3(x.mean(1))) 
+        p_head = F.softmax(self.cll_mask(x),dim=-1)  
+        v_aux = self.v_aux(x)                        
         return p_head,v_aux,attn_w
+
+    def cll_mask(self,x): # min(cell value) = 1 
+        x = x.reshape(x.shape[0],3,9) 
+        m = torch.zeros_like(x,dtype=torch.bool)   
+        m[:,-1,0] = True
+        value = -float("inf")
+        return torch.masked_fill(x,m,value)
 
 policy = p_net()
 policy(process_obs(torch.randint(0,9,(1,9,9))))
-policy.load_state_dict(torch.load("./model-22000",map_location="cpu"),strict=False)
+policy.load_state_dict(torch.load("./model-2000",map_location="cpu"),strict=False)
 
 env = envi()
 obs = env.reset()[0]
