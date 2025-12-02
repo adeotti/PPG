@@ -125,10 +125,12 @@ class memory: # Replay buffer class
         N = hypers.num_envs
         B = hypers.batchsize 
         self.state = torch.empty((B,N,9,9),device=hypers.device,dtype=torch.half)
+        # TODO : change action buffer shape
         self.action = torch.empty((B,3,N),device=hypers.device,dtype=torch.float32)
         self.values = torch.empty((B,N,1),device=hypers.device,dtype=torch.float32)
         self.values_aux = torch.empty((B,N,1),device=hypers.device,dtype=torch.float32)
         self.v_target = torch.empty((B,N,1),device=hypers.device,dtype=torch.float32)
+        # TODO : change prob and dist probs buffer shape
         self.prob = torch.empty((B,N,3),device=hypers.device,dtype=torch.float32) 
         self.rewards = torch.empty((B,N),device=hypers.device,dtype=torch.float32) 
         self.dones = torch.empty((B,N),device=hypers.device,dtype=torch.float32) 
@@ -149,14 +151,15 @@ class memory: # Replay buffer class
           
     @torch.no_grad()
     def step(self,num_it):
-        policy_output,v_policy,_ = self.p_net(process_obs(self._observation))
-        value = self.v_net(process_obs(self._observation))
-        distribution = Categorical(probs=policy_output)
-        action = distribution.sample() 
-        prob = distribution.log_prob(action)
+        # TODO : update new action sampling method following policy architecture changes
+        #policy_output,v_policy,_ = self.p_net(process_obs(self._observation))
+        #value = self.v_net(process_obs(self._observation))
+        #distribution = Categorical(probs=policy_output)
+        #action = distribution.sample() 
+        #prob = distribution.log_prob(action)
         
-        assert torch.equal(action.T.T,action)
-        action = action.T.cpu().numpy()
+        #assert torch.equal(action.T.T,action)
+        #action = action.T.cpu().numpy()
         state,reward,done,_,_ = self.env.step(action)
         
         for i in range(self.env.num_envs): # tracking episode rewards and total steps
@@ -284,6 +287,7 @@ class main:
                     v_target = advantages + values
                  
                     for _ in range(hypers.optim_steps): # sample reuse N_pi = 32
+                        # TODO Update shape and assignment
                         p_out,_,_ = self.p_net(states) 
                         dist = Categorical(probs=p_out)
                         new_probs = dist.log_prob(actions)
