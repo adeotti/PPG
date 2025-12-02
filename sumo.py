@@ -15,8 +15,9 @@ from collections import deque
 from itertools import chain
 from tqdm import tqdm
 
-warnings.filterwarnings("ignore")
+os.environ["QT_LOGGING_RULES"] = "*.debug=false;*.warning=false"
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
+warnings.filterwarnings("ignore")
 
 @dataclass(frozen=False)
 class Hypers:
@@ -68,18 +69,17 @@ class p_net(nn.Module):
         self.l1 = nn.LazyLinear(128)
         self.l2 = nn.LazyLinear(128)
  
-        #self.l3 = nn.LazyLinear(1)
         self.pos = nn.LazyLinear(1)
         self.num = nn.LazyLinear(10)
         self.v_aux = nn.LazyLinear(1)    # auxiliary value head
     
     def forward(self,x):
         x = self.c1(x)
-        x = F.relu(self.c2(x))
+        x = F.relu(self.c2(x))  
         x = F.relu(self.c3(x))
         x = x.flatten(2).transpose(-1,1) # -> torch.Size([1,81,128])
-        
-        x = x + self.emb
+    
+        x = x + self.emb 
         x,attn_w = self.attn(x,x,x) 
         x = F.relu(self.l1(x))
         x = F.relu(self.l2(x))
@@ -92,9 +92,9 @@ class p_net(nn.Module):
         features = x[idx,v_pos]
         num = self.cll_mask(self.num(features))
         num = F.softmax(num,-1)  
-        sys.exit(x.mean(1).shape)
-        v_aux = self.v_aux(x)                        
-        return (pos,num),v_aux,attn_w
+        
+        v_aux = self.v_aux(x.mean(1))                        
+        return (v_pos,num),v_aux,attn_w
 
     def cll_mask(self,x): # min(cell value) = 1 
         m = torch.zeros_like(x,dtype=torch.bool)   
@@ -102,10 +102,6 @@ class p_net(nn.Module):
         value = -float("inf")
         return torch.masked_fill(x,m,value)
 
-if __name__ == "__main__":
-    print(p_net()(process_obs(torch.randint(0,9,(hypers.num_envs,9,9)))))
-    sys.exit()
-        
 
 class v_net(nn.Module):
     def __init__(self):
