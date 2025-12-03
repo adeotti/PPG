@@ -39,17 +39,17 @@ class p_net(nn.Module):
         x = self.c1(x)
         x = F.relu(self.c2(x))
         x = F.relu(self.c3(x))
-        x = x.flatten(2).transpose(-1,1) # -> torch.Size([1,81,128])
+        x = x.flatten(2).transpose(-1,1) # -> torch.Size([1,81,128]) 
         
         x = x + self.emb
-        x,attn_w = self.attn(x,x,x) 
+        x,a_w = self.attn(x,x,x) 
         x = F.relu(self.l1(x))
         x = F.relu(self.l2(x))
         
         x = F.relu(self.l3(x.mean(1))) 
         p_head = F.softmax(self.cll_mask(x),dim=-1)  
         v_aux = self.v_aux(x)                        
-        return p_head,v_aux,attn_w
+        return p_head,v_aux,a_w
 
     def cll_mask(self,x): # min(cell value) = 1 
         x = x.reshape(x.shape[0],3,9) 
@@ -60,14 +60,16 @@ class p_net(nn.Module):
 
 policy = p_net()
 policy(process_obs(torch.randint(0,9,(1,9,9))))
-policy.load_state_dict(torch.load("./model-2000",map_location="cpu"),strict=False)
+policy.load_state_dict(torch.load("./model-10000",map_location="cpu"),strict=False)
 
 env = envi()
 obs = env.reset()[0]
 
 for n in range(2_000):
     dist,_,_ = policy(process_obs(torch.tensor(obs,dtype=torch.int64).unsqueeze(0)))
-    action = Categorical(probs=dist).sample().squeeze() 
+    action = Categorical(probs=dist).sample().squeeze()
+    if action[-1] == 9:
+        sys.exit()
     obs,reward,done,_,_ = env.step(action.numpy())
     env.render()
     if done:
