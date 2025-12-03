@@ -22,19 +22,19 @@ warnings.filterwarnings("ignore")
 @dataclass(frozen=False)
 class Hypers:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    horizon = 300
-    num_envs = 4
-    max_steps = 10_000
-    batchsize = 512
+    horizon = 3 # 300
+    num_envs = 2 # 10
+    max_steps = 100 # #10_000
+    batchsize = 64 #512
     minibatch = 16
-    e_aux = 6
+    e_aux = 1 # 6
     lr = 5e-4
     gamma = .99
     lambda_ = .99
     epsilon = .2
     beta = 1e-1         # entropy coeff
     beta_clone = 1      # kl coeff in the aux phase
-    optim_steps = 10    # defualt 32 as seen in the original paper
+    optim_steps = 2 # 10    # defualt 32 as seen in the original paper
     
 hypers = Hypers()
 
@@ -71,30 +71,31 @@ class p_net(nn.Module):
  
         self.pos = nn.LazyLinear(1)
         self.num = nn.LazyLinear(10)
-        self.v_aux = nn.LazyLinear(1)    # auxiliary value head
+        self.v_aux = nn.LazyLinear(1)            # auxiliary value head
     
     def forward(self,x):
         x = self.c1(x)
         x = F.relu(self.c2(x))  
         x = F.relu(self.c3(x))
-        x = x.flatten(2).transpose(-1,1) # -> torch.Size([1,81,128])
+        x = x.flatten(2).transpose(-1,1)         # -> torch.Size([1,81,128])
     
         x = x + self.emb 
-        x,attn_w = self.attn(x,x,x) 
+        x,a_w = self.attn(x,x,x)                 # a_w : attention weights 
         x = F.relu(self.l1(x))
         x = F.relu(self.l2(x))
                
-        pos = F.relu(self.pos(x)).squeeze(-1) # pos of the cell
+        pos = F.relu(self.pos(x)).squeeze(-1)    # cell positon 
         pos = F.softmax(pos,-1)
-        v_pos = Categorical(probs=pos).sample()
+        pos_dist = Categorical(probs=pos)
+        v_pos = pos_dist.sample()
 
-        idx = torch.arange(hypers.num_envs) # batch idx
+        idx = torch.arange(hypers.num_envs)      # cell value
         features = x[idx,v_pos]
         num = self.cll_mask(self.num(features))
         num = F.softmax(num,-1)  
-        
+
         v_aux = self.v_aux(x.mean(1))                        
-        return (v_pos,num),v_aux,attn_w
+        return v_pos,num,pos_dist,v_aux,a_w
 
     def cll_mask(self,x): # min(cell value) = 1 
         m = torch.zeros_like(x,dtype=torch.bool)   
@@ -124,13 +125,11 @@ class memory: # Replay buffer class
     def __init__(self,env:AsyncVectorEnv,p_net,v_net):
         N = hypers.num_envs
         B = hypers.batchsize 
-        self.state = torch.empty((B,N,9,9),device=hypers.device,dtype=torch.half)
-        # TODO : change action buffer shape
+        self.state = torch.empty((B,N,9,9),device=hypers.device,dtype=torch.half) 
         self.action = torch.empty((B,3,N),device=hypers.device,dtype=torch.float32)
         self.values = torch.empty((B,N,1),device=hypers.device,dtype=torch.float32)
         self.values_aux = torch.empty((B,N,1),device=hypers.device,dtype=torch.float32)
         self.v_target = torch.empty((B,N,1),device=hypers.device,dtype=torch.float32)
-        # TODO : change prob and dist probs buffer shape
         self.prob = torch.empty((B,N,3),device=hypers.device,dtype=torch.float32) 
         self.rewards = torch.empty((B,N),device=hypers.device,dtype=torch.float32) 
         self.dones = torch.empty((B,N),device=hypers.device,dtype=torch.float32) 
@@ -151,7 +150,6 @@ class memory: # Replay buffer class
           
     @torch.no_grad()
     def step(self,num_it):
-        # TODO : update new action sampling method following policy architecture changes
         #policy_output,v_policy,_ = self.p_net(process_obs(self._observation))
         #value = self.v_net(process_obs(self._observation))
         #distribution = Categorical(probs=policy_output)
@@ -291,7 +289,7 @@ class main:
                         p_out,_,_ = self.p_net(states) 
                         dist = Categorical(probs=p_out)
                         new_probs = dist.log_prob(actions)
-                        ratio = torch.exp(new_probs - probs.flatten(0,1)) 
+                        ratio = torch.exp(new_probs - probs.flatten(0,1))  
                         p1 = ratio * advantages
                         p2 = torch.clamp(ratio,1+hypers.epsilon,1-hypers.epsilon) * advantages 
                         loss_policy = - torch.mean(torch.min(p1,p2))
