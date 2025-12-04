@@ -218,16 +218,21 @@ class memory: # Replay buffer class
             self.num_probs[idx]
         )
 
-    def update_prob(self,x): # update (replace) the entire probability distribution
-        x = x.reshape(*self.dist_prob.shape) 
-        self.dist_prob = x
+    def update_pos_prob(self,x): 
+        # update (replace) the entire probability distribution in the buffer
+        x = x.reshape(*self.pos_probs.shape) 
+        self.pos_probs = x
+
+    def update_num_prob(self,x):
+        x = x.reshape(*self.num_probs.shape)
+        self.num_probs = x
 
     def update_v_target(self,x): # update v target preallocated space 
         x = x.reshape(*self.v_target.shape) 
         self.v_target = x
  
     def traj_reward(self):
-        return list(map(torch.tensor,(self.finished_reward,self.log_total_steps)))
+        return list(map(torch.tensor,(self.rewards_deque,self.total_steps_deque)))
 
 
 class main:
@@ -292,7 +297,8 @@ class main:
                 
                 torch.compiler.cudagraph_mark_step_begin()
                 self.memory.compute_advantage()
-                frozen_probs = []
+                frozen_pos_probs = []
+                frozen_num_probs = []
                 v_target_list = []
             
                 for _ in range(hypers.batchsize//hypers.minibatch):
@@ -318,8 +324,9 @@ class main:
                         self.optim.zero_grad(set_to_none=True)
                         loss.backward()
                         self.optim.step()
-                    sys.exit()
-                    frozen_probs.append(dist.probs)
+                    
+                    frozen_pos_probs.append(pos_data[0].probs)
+                    frozen_num_probs.append(num_data[0].probs)
                     v_target_list.append(v_target)
                     
                     self.writter.add_scalar("main/Loss policy",loss_policy)
@@ -327,7 +334,8 @@ class main:
                     self.writter.add_scalar("main/total loss",loss)
                     self.writter.add_scalar("main/episode rewards",self.memory.traj_reward()[0].mean())
 
-                self.memory.update_prob(torch.stack(frozen_probs))
+                self.memory.update_pos_prob(torch.stack(frozen_pos_probs))
+                self.memory.update_num_prob(torch.stack(frozen_num_probs))
                 self.memory.update_v_target(torch.stack(v_target_list)) 
            
                 for _ in range(hypers.e_aux): # auxiliary phase 
