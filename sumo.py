@@ -72,25 +72,25 @@ class p_net(nn.Module):
  
         self.pos = nn.LazyLinear(1)
         self.num = nn.LazyLinear(10)
-        self.v_aux = nn.LazyLinear(1)            # auxiliary value head
+        self.v_aux = nn.LazyLinear(1) # auxiliary value head
     
     def forward(self,x):
         x = self.c1(x)
         x = F.relu(self.c2(x))  
         x = F.relu(self.c3(x))
-        x = x.flatten(2).transpose(-1,1)         # -> torch.Size([1,81,128])
+        x = x.flatten(2).transpose(-1,1) # -> torch.Size([1,81,128])
     
         x = x + self.emb 
         x,_ = self.attn(x,x,x)          
         x = F.relu(self.l1(x))
         x = F.relu(self.l2(x))
                
-        pos = F.relu(self.pos(x)).squeeze(-1)    # cell positon 
+        pos = F.relu(self.pos(x)).squeeze(-1) # cell positon code block
         pos = F.softmax(pos,-1)
         dist_post = Categorical(probs=pos)
         sample_pos = dist_post.sample()
 
-        idx = torch.arange(hypers.num_envs)      # cell value
+        idx = torch.arange(x.shape[0]) # cell value code block
         features = x[idx,sample_pos]
         num = self.cll_mask(self.num(features))
         num = F.softmax(num,-1)
@@ -300,12 +300,12 @@ class main:
                     v_target = advantages + values
                     
                     for _ in range(hypers.optim_steps): # sample reuse N_pi = 32
-                        # TODO Update shape and assignment
                         pos_data,num_data,_ = self.p_net(states)
-                        log_prob = pos_data[0].log_prob(pos_data[1]) + num_data[0].log_prob(num_data[1])
-                        
-                        dist = Categorical(probs=p_out)
-                        new_probs = dist.log_prob(actions)
+                        sys.exit()
+                        new_log_prob = pos_data[0].log_prob(pos_data[1]) + num_data[0].log_prob(num_data[1])
+                        sys.exit()
+                        #dist = Categorical(probs=p_out)
+                        #new_probs = dist.log_prob(actions)
                         ratio = torch.exp(new_probs - probs.flatten(0,1))  
                         p1 = ratio * advantages
                         p2 = torch.clamp(ratio,1+hypers.epsilon,1-hypers.epsilon) * advantages 
