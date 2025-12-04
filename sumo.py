@@ -299,26 +299,26 @@ class main:
                     states,actions,values,_,_,advantages,log_prob,_,_ = self.process_sample()
                     v_target = advantages + values
                     
-                    for _ in range(hypers.optim_steps): # sample reuse N_pi = 32
+                    for _ in range(hypers.optim_steps): # sample reuse N_pi = 32, as seen in the paper
                         pos_data,num_data,_ = self.p_net(states)
-                        sys.exit()
-                        new_log_prob = pos_data[0].log_prob(pos_data[1]) + num_data[0].log_prob(num_data[1])
-                        sys.exit()
-                        #dist = Categorical(probs=p_out)
-                        #new_probs = dist.log_prob(actions)
-                        ratio = torch.exp(new_probs - probs.flatten(0,1))  
+                        new_log_prob = pos_data[0].log_prob(pos_data[1]) + num_data[0].log_prob(num_data[1]) 
+                        
+                        assert new_log_prob.shape == log_prob.squeeze().shape
+                        ratio = torch.exp(new_log_prob - log_prob.squeeze()) # log_prob is the old log probs  
                         p1 = ratio * advantages
-                        p2 = torch.clamp(ratio,1+hypers.epsilon,1-hypers.epsilon) * advantages 
+                        p2 = torch.clamp(ratio,1-hypers.epsilon,1+hypers.epsilon) * advantages 
                         loss_policy = - torch.mean(torch.min(p1,p2))
-                   
+             
                         new_values = self.v_net(states) 
                         loss_value = F.smooth_l1_loss(new_values.squeeze(), v_target)
-                   
-                        loss = loss_policy + loss_value - (hypers.beta * dist.entropy().mean())
+                        
+                        entropy = (pos_data[0].entropy() + num_data[0].entropy()).mean() 
+
+                        loss = loss_policy + loss_value - (hypers.beta * entropy)
                         self.optim.zero_grad(set_to_none=True)
                         loss.backward()
                         self.optim.step()
-
+                    sys.exit()
                     frozen_probs.append(dist.probs)
                     v_target_list.append(v_target)
                     
