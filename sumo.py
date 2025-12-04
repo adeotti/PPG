@@ -7,6 +7,7 @@ from torch.optim import Adam
 from torch.utils.tensorboard import SummaryWriter
 from torch.distributions.kl import kl_divergence as kl
 
+import numpy as np
 import gymnasium as gym
 from gymnasium.vector import AsyncVectorEnv
 
@@ -127,6 +128,7 @@ class memory: # Replay buffer class
     def __init__(self,env:AsyncVectorEnv,p_net,v_net):
         N = hypers.num_envs
         B = hypers.batchsize 
+
         self.state = torch.empty((B,N,9,9),device=hypers.device,dtype=torch.half) 
         self.action = torch.empty((B,3,N),device=hypers.device,dtype=torch.float32)
         self.values = torch.empty((B,N,1),device=hypers.device,dtype=torch.float32)
@@ -137,7 +139,8 @@ class memory: # Replay buffer class
 
         self.pos_probs = torch.empty((B,N,81),device=hypers.device,dtype=torch.float32)
         self.num_probs = torch.empty((B,N,10),device=hypers.device,dtype=torch.float32) 
-        self.log_prob = torch.empty((B,N,1),device=hypers.device,dtype=torch.float32) 
+        self.log_prob = torch.empty((B,N,1),device=hypers.device,dtype=torch.float32)
+
         self.advantages = torch.empty((B,N),device=hypers.device,dtype=torch.float32) 
 
         self.env = env
@@ -147,8 +150,8 @@ class memory: # Replay buffer class
         self.gamma = hypers.gamma   
         self._lambda_ = hypers.lambda_ 
         self.pointer = 0
-        self.finished_reward = deque(maxlen=30)
-        self.log_total_steps = deque(maxlen=30)
+        self.rewards_deque = deque(maxlen=hypers.num_envs+2)
+        self.total_steps_deque = deque(maxlen=hypers.num_envs+2)
         self.episode_reward = torch.empty(self.env.num_envs).float()
         self.total_steps = torch.empty(hypers.num_envs).float()
           
@@ -170,16 +173,15 @@ class memory: # Replay buffer class
         # self.env.action_space.sample() >>> (array([0, 5]), array([2, 6]), array([3, 4])) 
       
         state,reward,done,_,_ = self.env.step(action)
-        
-        for i in range(self.env.num_envs): # tracking episode rewards and total steps
-            self.episode_reward[i] += reward[i] 
-            self.total_steps[i] += 1
-            if done[i]:
-                self.finished_reward.append(self.episode_reward[i])
-                self.log_total_steps.append(self.total_steps[i])
-                self.episode_reward[i] = 0
-                self.total_steps[i] = 0
-        
+        reward = np.round(reward,2)
+                    
+        self.episode_reward += reward  # tracking episode rewards and total steps
+        self.total_steps += 1 
+        done_envs = np.where(done==False)[0]
+        if done_envs.shape[0] > 0:
+            self.rewards_deque.append(self.episode_reward[done_envs].tolist())
+            self.total_steps_deque.append(self.total_steps[done_envs].tolist())
+
         self.state[num_it].copy_(torch.as_tensor(self._observation)) 
         self.action[num_it].copy_(torch.as_tensor(action)) 
         self.values[num_it].copy_(value) 
@@ -188,7 +190,7 @@ class memory: # Replay buffer class
         self.dones[num_it].copy_(torch.as_tensor(done)) 
         
         self._observation = state  
-
+   
     @torch.compile(mode="reduce-overhead",fullgraph=True,)
     @torch.no_grad()
     def compute_advantage(self): 
