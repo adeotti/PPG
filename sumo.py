@@ -278,8 +278,8 @@ class main:
             v_target,
             advantages,
             log_prob,
-            Categorical(probs=pos_probs),
-            Categorical(probs=num_probs)
+            pos_probs,
+            num_probs
         )
 
     def norm_attn(self,x:torch.Tensor): # norm attention weights for tensorboard 
@@ -340,26 +340,38 @@ class main:
            
                 for _ in range(hypers.e_aux): # auxiliary phase 
                     for _ in range(hypers.batchsize//hypers.minibatch):   
-                        states,actions,values,v_policy,v_targets,probs,advantages,dist_prob = self.process_sample()
+                        states,actions,_,v_policy,v_targets,_,log_prob,pos_probs,num_probs = self.process_sample()
                         
                         l_v_aux = F.smooth_l1_loss(v_policy,v_target) 
-                        p_out,_,attn_w = self.p_net(states) 
-                        new_dist = Categorical(probs=p_out)
-                        l_joint = l_v_aux + (hypers.beta_clone * kl(dist_prob,new_dist).mean()) 
-                      
+                        pos_data,num_data,_ = self.p_net(states) 
+
+                        new_pos_probs = pos_data[0] # already an instance of the Categorical class
+                        old_pos_probs = pos_probs.flatten(0,1)
+                        assert new_pos_probs.probs.shape == old_pos_probs.shape
+                        old_pos_probs = Categorical(probs=old_pos_probs)
+                        pos_kl = kl(old_pos_probs,new_pos_probs)
+                    
+                        new_num_probs = num_data[0] # also an instance of the Categorical class
+                        old_num_probs = num_probs.flatten(0,1) 
+                        assert new_num_probs.probs.shape == old_num_probs.shape
+                        old_num_probs = Categorical(probs=old_num_probs)
+                        num_kl = kl(old_num_probs,new_num_probs)
+                         
+                        kl_div = (pos_kl + num_kl).mean()
+                        l_joint = l_v_aux + (hypers.beta_clone * kl_div) 
+                        
                         new_values = self.v_net(states) 
                         l_value = F.smooth_l1_loss(new_values,v_targets) 
-                  
+                 
                         loss_aux = l_joint + l_value
                         self.optim.zero_grad(set_to_none=True)
                         loss_aux.backward()
                         self.optim.step()
-                        
+                    
                         self.writter.add_scalar("auxiliary/loss aux value",l_v_aux)
                         self.writter.add_scalar("auxiliary/loss joint",l_joint)
                         self.writter.add_scalar("auxiliary/loss value",l_value)
-                        #self.writter.add_images("Image",self.norm_attn(attn_w),n)
- 
+                   
                 if n%2_000 == 0:
                     self.save(n)
 
