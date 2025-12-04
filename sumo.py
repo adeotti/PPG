@@ -191,7 +191,7 @@ class memory: # Replay buffer class
         
         self._observation = state  
    
-    @torch.compile(mode="reduce-overhead",fullgraph=True,)
+    #@torch.compile(mode="reduce-overhead",fullgraph=True,)
     @torch.no_grad()
     def compute_advantage(self): 
         next_value = self.v_net(process_obs(self._observation)).unsqueeze(0)
@@ -202,8 +202,7 @@ class memory: # Replay buffer class
             gae.mul_(self._lambda_ * self.gamma * (1-self.dones[n])).add_(td[n])
             self.advantages[n].copy_(gae)
     
-    # TODO : update sampling method
-    """@torch.no_grad()
+    @torch.no_grad()
     def sample(self,minibatch): # with random sampling
         idx = torch.randperm(hypers.batchsize)[:hypers.minibatch]
         return (
@@ -212,10 +211,12 @@ class memory: # Replay buffer class
             self.values[idx].flatten(0,1),
             self.values_aux[idx].flatten(0,1),
             self.v_target[idx].flatten(0,1),
-            self.prob[idx],
             self.advantages[idx],
-            self.dist_prob[idx].flatten(0,1)
-        )"""
+
+            self.log_prob[idx].flatten(0,1),
+            self.pos_probs[idx],
+            self.num_probs[idx]
+        )
 
     def update_prob(self,x): # update (replace) the entire probability distribution
         x = x.reshape(*self.dist_prob.shape) 
@@ -261,7 +262,7 @@ class main:
         torch.save(data,f"./model-{n}")
 
     def process_sample(self): # sample and process some items of the sample
-        states,actions,values,v_policy,v_target,probs,advantages,dist_prob = self.memory.sample(hypers.minibatch)
+        states,actions,values,v_policy,v_target,advantages,log_prob,pos_probs,num_probs = self.memory.sample(hypers.minibatch)
         actions = actions.transpose(1, 2).flatten(0,1)
         advantages = advantages.flatten().unsqueeze(-1)
         return (
@@ -270,9 +271,10 @@ class main:
             values,
             v_policy,
             v_target,
-            probs,
             advantages,
-            Categorical(probs=dist_prob)
+            log_prob,
+            Categorical(probs=pos_probs),
+            Categorical(probs=num_probs)
         )
 
     def norm_attn(self,x:torch.Tensor): # norm attention weights for tensorboard 
@@ -286,20 +288,22 @@ class main:
         if start:
             for n in tqdm(range(hypers.max_steps),total=hypers.max_steps):
                 for m in range(hypers.batchsize):
-                    self.memory.step(m)  
-                sys.exit()
+                    self.memory.step(m) 
+                
                 torch.compiler.cudagraph_mark_step_begin()
                 self.memory.compute_advantage()
                 frozen_probs = []
                 v_target_list = []
             
                 for _ in range(hypers.batchsize//hypers.minibatch):
-                    states,actions,values,_,_,probs,advantages,_ = self.process_sample()
+                    states,actions,values,_,_,advantages,log_prob,_,_ = self.process_sample()
                     v_target = advantages + values
-                 
+                    
                     for _ in range(hypers.optim_steps): # sample reuse N_pi = 32
                         # TODO Update shape and assignment
-                        p_out,_,_ = self.p_net(states) 
+                        pos_data,num_data,_ = self.p_net(states)
+                        log_prob = pos_data[0].log_prob(pos_data[1]) + num_data[0].log_prob(num_data[1])
+                        
                         dist = Categorical(probs=p_out)
                         new_probs = dist.log_prob(actions)
                         ratio = torch.exp(new_probs - probs.flatten(0,1))  
