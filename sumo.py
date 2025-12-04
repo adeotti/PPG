@@ -282,13 +282,6 @@ class main:
             num_probs
         )
 
-    def norm_attn(self,x:torch.Tensor): # norm attention weights for tensorboard 
-        x.unsqueeze_(1)
-        x = F.interpolate(x,size=(200,200),mode="nearest")
-        amins = x.amin((-2,-1),keepdim=True)
-        amaxs = x.amax((-2,-1),keepdim=True)
-        return (x - amins)/(amaxs - amins)
-
     def run(self,start=False):
         if start:
             for n in tqdm(range(hypers.max_steps),total=hypers.max_steps):
