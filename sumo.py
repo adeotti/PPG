@@ -25,8 +25,8 @@ class Hypers:
     horizon = 3 # 300
     num_envs = 2 # 10
     max_steps = 100 # #10_000
-    batchsize = 64 #512
-    minibatch = 16
+    batchsize = 10 #512
+    minibatch = 2
     e_aux = 1 # 6
     lr = 5e-4
     gamma = .99
@@ -80,22 +80,24 @@ class p_net(nn.Module):
         x = x.flatten(2).transpose(-1,1)         # -> torch.Size([1,81,128])
     
         x = x + self.emb 
-        x,a_w = self.attn(x,x,x)                 # a_w : attention weights 
+        x,_ = self.attn(x,x,x)          
         x = F.relu(self.l1(x))
         x = F.relu(self.l2(x))
                
         pos = F.relu(self.pos(x)).squeeze(-1)    # cell positon 
         pos = F.softmax(pos,-1)
-        pos_dist = Categorical(probs=pos)
-        v_pos = pos_dist.sample()
+        dist_post = Categorical(probs=pos)
+        sample_pos = dist_post.sample()
 
         idx = torch.arange(hypers.num_envs)      # cell value
-        features = x[idx,v_pos]
+        features = x[idx,sample_pos]
         num = self.cll_mask(self.num(features))
-        num = F.softmax(num,-1)  
+        num = F.softmax(num,-1)
+        dist_num = Categorical(probs=num)
+        sample_num = dist_num.sample()
 
         v_aux = self.v_aux(x.mean(1))                        
-        return v_pos,num,pos_dist,v_aux,a_w
+        return (dist_post,sample_pos),(dist_num,sample_num),v_aux
 
     def cll_mask(self,x): # min(cell value) = 1 
         m = torch.zeros_like(x,dtype=torch.bool)   
@@ -130,10 +132,12 @@ class memory: # Replay buffer class
         self.values = torch.empty((B,N,1),device=hypers.device,dtype=torch.float32)
         self.values_aux = torch.empty((B,N,1),device=hypers.device,dtype=torch.float32)
         self.v_target = torch.empty((B,N,1),device=hypers.device,dtype=torch.float32)
-        self.prob = torch.empty((B,N,3),device=hypers.device,dtype=torch.float32) 
         self.rewards = torch.empty((B,N),device=hypers.device,dtype=torch.float32) 
-        self.dones = torch.empty((B,N),device=hypers.device,dtype=torch.float32) 
-        self.dist_prob = torch.empty((B,N,3,9),device=hypers.device,dtype=torch.float32) 
+        self.dones = torch.empty((B,N),device=hypers.device,dtype=torch.float32)
+
+        self.pos_probs = torch.empty((B,N,81),device=hypers.device,dtype=torch.float32)
+        self.num_probs = torch.empty((B,N,10),device=hypers.device,dtype=torch.float32) 
+        self.log_prob = torch.empty((B,N,1),device=hypers.device,dtype=torch.float32) 
         self.advantages = torch.empty((B,N),device=hypers.device,dtype=torch.float32) 
 
         self.env = env
@@ -150,14 +154,21 @@ class memory: # Replay buffer class
           
     @torch.no_grad()
     def step(self,num_it):
-        #policy_output,v_policy,_ = self.p_net(process_obs(self._observation))
-        #value = self.v_net(process_obs(self._observation))
-        #distribution = Categorical(probs=policy_output)
-        #action = distribution.sample() 
-        #prob = distribution.log_prob(action)
+        pos_data,num_data,v_policy = self.p_net(process_obs(self._observation))
+        self.pos_probs[num_it].copy_(pos_data[0].probs)
+        self.num_probs[num_it].copy_(num_data[0].probs)
+        # joint probability distribution
+        log_prob = pos_data[0].log_prob(pos_data[1]) + num_data[0].log_prob(num_data[1])
+        self.log_prob[num_it].copy_(log_prob.unsqueeze(-1))
         
-        #assert torch.equal(action.T.T,action)
-        #action = action.T.cpu().numpy()
+        value = self.v_net(process_obs(self._observation))
+        
+        pos = pos_data[-1]
+        xpos = pos // 9 ; ypos = pos % 9
+        cell_value = num_data[-1]
+        action = torch.stack((xpos,ypos,cell_value)).cpu().numpy() # shape -> [x_n...][y_n...][z_n...]
+        # self.env.action_space.sample() >>> (array([0, 5]), array([2, 6]), array([3, 4])) 
+      
         state,reward,done,_,_ = self.env.step(action)
         
         for i in range(self.env.num_envs): # tracking episode rewards and total steps
@@ -168,16 +179,15 @@ class memory: # Replay buffer class
                 self.log_total_steps.append(self.total_steps[i])
                 self.episode_reward[i] = 0
                 self.total_steps[i] = 0
-     
+        
         self.state[num_it].copy_(torch.as_tensor(self._observation)) 
         self.action[num_it].copy_(torch.as_tensor(action)) 
         self.values[num_it].copy_(value) 
         self.values_aux[num_it].copy_(v_policy)
-        self.prob[num_it].copy_(prob)
         self.rewards[num_it].copy_(torch.as_tensor(reward))
         self.dones[num_it].copy_(torch.as_tensor(done)) 
-        self.dist_prob[num_it].copy_(distribution.probs)
-        self._observation = state        
+        
+        self._observation = state  
 
     @torch.compile(mode="reduce-overhead",fullgraph=True,)
     @torch.no_grad()
@@ -190,7 +200,8 @@ class memory: # Replay buffer class
             gae.mul_(self._lambda_ * self.gamma * (1-self.dones[n])).add_(td[n])
             self.advantages[n].copy_(gae)
     
-    @torch.no_grad()
+    # TODO : update sampling method
+    """@torch.no_grad()
     def sample(self,minibatch): # with random sampling
         idx = torch.randperm(hypers.batchsize)[:hypers.minibatch]
         return (
@@ -202,7 +213,7 @@ class memory: # Replay buffer class
             self.prob[idx],
             self.advantages[idx],
             self.dist_prob[idx].flatten(0,1)
-        )
+        )"""
 
     def update_prob(self,x): # update (replace) the entire probability distribution
         x = x.reshape(*self.dist_prob.shape) 
@@ -225,8 +236,8 @@ class main:
         self.p_net.apply(w_init)
         self.v_net.apply(w_init)
 
-        self.p_net.compile()
-        self.v_net.compile()
+        #self.p_net.compile()
+        #self.v_net.compile()
 
     def __init__(self):
         self.p_net = p_net().to(hypers.device)
@@ -274,7 +285,7 @@ class main:
             for n in tqdm(range(hypers.max_steps),total=hypers.max_steps):
                 for m in range(hypers.batchsize):
                     self.memory.step(m)  
-
+                sys.exit()
                 torch.compiler.cudagraph_mark_step_begin()
                 self.memory.compute_advantage()
                 frozen_probs = []
