@@ -85,16 +85,17 @@ class p_net(nn.Module):
         x = F.relu(self.l1(x))
         x = F.relu(self.l2(x))
                
-        pos = F.relu(self.pos(x)).squeeze(-1) # cell positon code block
+        pos = F.relu(self.pos(x)).squeeze(-1) # cell positon block
         pos = F.softmax(pos,-1)
         dist_post = Categorical(probs=pos)
         sample_pos = dist_post.sample()
-
-        idx = torch.arange(x.shape[0]) # cell value code block
-        features = x[idx,sample_pos]
-        num = self.cll_mask(self.num(features))
-        num = F.softmax(num,-1)
-        dist_num = Categorical(probs=num)
+        
+        num_logits = self.num(x) # cell value block
+        idx = torch.arange(x.size(0),device=x.device)
+        o = num_logits[idx,sample_pos]
+        o = self.cll_mask(o)
+        o = F.softmax(o,-1)
+        dist_num = Categorical(probs=o)
         sample_num = dist_num.sample()
 
         v_aux = self.v_aux(x.mean(1))                        
@@ -177,7 +178,7 @@ class memory: # Replay buffer class
                     
         self.episode_reward += reward  # tracking episode rewards and total steps
         self.total_steps += 1 
-        done_envs = np.where(done==False)[0]
+        done_envs = np.where(done==True)[0]
         if done_envs.shape[0] > 0:
             self.rewards_deque.append(self.episode_reward[done_envs].tolist())
             self.total_steps_deque.append(self.total_steps[done_envs].tolist())
@@ -296,14 +297,16 @@ class main:
             
                 for _ in range(hypers.batchsize//hypers.minibatch):
                     states,actions,values,_,_,advantages,log_prob,_,_ = self.process_sample()
-                    v_target = advantages + values
+                    v_target = advantages + values 
                     
                     for _ in range(hypers.optim_steps): # sample reuse N_pi = 32, as seen in the paper
                         pos_data,num_data,_ = self.p_net(states)
                         new_log_prob = pos_data[0].log_prob(pos_data[1]) + num_data[0].log_prob(num_data[1]) 
                         
                         assert new_log_prob.shape == log_prob.squeeze().shape
-                        ratio = torch.exp(new_log_prob - log_prob.squeeze()) # log_prob is the old log probs  
+                        ratio = torch.exp(new_log_prob - log_prob.squeeze()).unsqueeze(-1)  
+                        
+                        assert ratio.shape == advantages.shape, f"{ratio.shape} != {advantages.shape}" 
                         p1 = ratio * advantages
                         p2 = torch.clamp(ratio,1-hypers.epsilon,1+hypers.epsilon) * advantages 
                         loss_policy = - torch.mean(torch.min(p1,p2))
@@ -335,7 +338,7 @@ class main:
                     for _ in range(hypers.batchsize//hypers.minibatch):   
                         states,actions,_,v_policy,v_targets,_,log_prob,pos_probs,num_probs = self.process_sample()
                         
-                        l_v_aux = F.smooth_l1_loss(v_policy,v_target) 
+                        l_v_aux = F.smooth_l1_loss(v_policy,v_targets) 
                         pos_data,num_data,_ = self.p_net(states) 
 
                         new_pos_probs = pos_data[0] # already an instance of the Categorical class
