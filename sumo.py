@@ -18,6 +18,7 @@ from tqdm import tqdm
 
 os.environ["QT_LOGGING_RULES"] = "*.debug=false;*.warning=false"
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
+os.environ["PYTHONOPTIMIZE"] = "1" # also disable asserts
 warnings.filterwarnings("ignore")
 
 @dataclass(frozen=False)
