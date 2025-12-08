@@ -10,7 +10,6 @@ from torch.distributions.kl import kl_divergence as kl
 import numpy as np
 import gymnasium as gym
 from gymnasium.vector import AsyncVectorEnv
-
 from dataclasses import dataclass
 from collections import deque
 from itertools import chain
@@ -24,19 +23,19 @@ warnings.filterwarnings("ignore")
 @dataclass(frozen=False)
 class Hypers:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    horizon = 300
-    num_envs = 10
-    max_steps = 30_000
-    batchsize = 512
-    minibatch = 32
-    e_aux = 6
+    horizon = 3#300
+    num_envs = 2#10
+    max_steps = 30#30_000
+    batchsize = 10#512
+    minibatch = 5#32
+    e_aux = 1#6
     lr = 5e-4
     gamma = .99
     lambda_ = .99
     epsilon = .2
     beta = 1e-1         # entropy coeff
     beta_clone = 1      # kl coeff in the aux phase
-    optim_steps = 10    # defualt 32 as seen in the original paper
+    optim_steps = 1#10    # defualt 32 as seen in the original paper
     
 hypers = Hypers()
 
@@ -68,6 +67,7 @@ class p_net(nn.Module):
 
         self.emb = nn.Parameter(torch.zeros(1,81,128))
         self.attn = nn.MultiheadAttention(128,4,batch_first=True)
+        self.norm = nn.LayerNorm(128)
         self.l1 = nn.LazyLinear(128)
         self.l2 = nn.LazyLinear(128)
  
@@ -77,16 +77,17 @@ class p_net(nn.Module):
     
     def forward(self,x):
         x = self.c1(x)
-        x = F.relu(self.c2(x))  
-        x = F.relu(self.c3(x))
+        x = F.silu(self.c2(x))  
+        x = F.silu(self.c3(x))
         x = x.flatten(2).transpose(-1,1) # -> torch.Size([1,81,128])
     
         x = x + self.emb 
-        x,_ = self.attn(x,x,x)          
-        x = F.relu(self.l1(x))
-        x = F.relu(self.l2(x))
+        x,_ = self.attn(x,x,x)  
+        x = self.norm(x)
+        x = F.silu(self.l1(x))
+        x = F.silu(self.l2(x))
                
-        pos = F.relu(self.pos(x)).squeeze(-1) # cell positon block
+        pos = self.pos(x).squeeze(-1) # cell position block
         pos = F.softmax(pos,-1)
         dist_post = Categorical(probs=pos)
         sample_pos = dist_post.sample()
@@ -100,7 +101,7 @@ class p_net(nn.Module):
         sample_num = dist_num.sample()
 
         v_aux = self.v_aux(x.mean(1))                        
-        return (dist_post,sample_pos),(dist_num,sample_num),v_aux
+        return (dist_post,sample_pos),(dist_num,sample_num),v_aux.squeeze()
 
     def cll_mask(self,x): # min(cell value) = 1 
         m = torch.zeros_like(x,dtype=torch.bool)   
@@ -123,7 +124,7 @@ class v_net(nn.Module):
         x = F.relu(self.c2(x)) # -> torch.Size([n env, 3136])
         x = F.relu(self.l1(x.flatten(start_dim=1)))
         x = F.relu(self.l2(x))
-        return self.v(x) 
+        return self.v(x).squeeze() 
 
 
 class memory: # Replay buffer class
@@ -133,9 +134,10 @@ class memory: # Replay buffer class
 
         self.state = torch.empty((B,N,9,9),device=hypers.device,dtype=torch.half) 
         self.action = torch.empty((B,3,N),device=hypers.device,dtype=torch.float32)
-        self.values = torch.empty((B,N,1),device=hypers.device,dtype=torch.float32)
-        self.values_aux = torch.empty((B,N,1),device=hypers.device,dtype=torch.float32)
-        self.v_target = torch.empty((B,N,1),device=hypers.device,dtype=torch.float32)
+
+        self.values = torch.empty((B,N),device=hypers.device,dtype=torch.float32)
+        self.values_aux = torch.empty((B,N),device=hypers.device,dtype=torch.float32)
+        self.v_target = torch.empty((B,N),device=hypers.device,dtype=torch.float32)
         self.rewards = torch.empty((B,N),device=hypers.device,dtype=torch.float32) 
         self.dones = torch.empty((B,N),device=hypers.device,dtype=torch.float32)
 
@@ -151,7 +153,6 @@ class memory: # Replay buffer class
         self.v_net = v_net
         self.gamma = hypers.gamma   
         self._lambda_ = hypers.lambda_ 
-        self.pointer = 0
         self.rewards_deque = deque(maxlen=hypers.num_envs+2)
         self.total_steps_deque = deque(maxlen=hypers.num_envs+2)
         self.episode_reward = torch.empty(self.env.num_envs).float()
@@ -193,12 +194,12 @@ class memory: # Replay buffer class
         
         self._observation = state  
    
-    @torch.compile(mode="reduce-overhead",fullgraph=True,)
+    #@torch.compile()
     @torch.no_grad()
     def compute_advantage(self): 
-        next_value = self.v_net(process_obs(self._observation)).unsqueeze(0)
+        next_value = self.v_net(process_obs(self._observation)).unsqueeze(0) 
         _values = torch.cat([self.values,next_value]).squeeze(-1)
-        gae = torch.zeros_like(self.rewards[0], device=hypers.device)  
+        gae = torch.zeros_like(self.rewards[0], device=hypers.device)
         td = self.rewards.clone().add_(self.gamma * _values[1:] * (1 - self.dones)).sub_(_values[:-1])
         for n in reversed(range(len(self.rewards))): 
             gae.mul_(self._lambda_ * self.gamma * (1-self.dones[n])).add_(td[n])
@@ -209,19 +210,18 @@ class memory: # Replay buffer class
         idx = torch.randperm(hypers.batchsize)[:hypers.minibatch]
         return (
             self.state[idx].flatten(0,1),
-            self.action[idx],
+            self.action[idx].transpose(1, 2).flatten(0,1),
             self.values[idx].flatten(0,1),
             self.values_aux[idx].flatten(0,1),
             self.v_target[idx].flatten(0,1),
-            self.advantages[idx],
+            self.advantages[idx].flatten(),
 
             self.log_prob[idx].flatten(0,1),
             self.pos_probs[idx],
             self.num_probs[idx]
         )
-
-    def update_pos_prob(self,x): 
-        # update (replace) the entire probability distribution in the buffer
+  
+    def update_pos_prob(self,x):  
         x = x.reshape(*self.pos_probs.shape) 
         self.pos_probs = x
 
@@ -246,8 +246,8 @@ class main:
         self.p_net.apply(w_init)
         self.v_net.apply(w_init)
 
-        self.p_net.compile()
-        self.v_net.compile()
+        #self.p_net.compile()
+        #self.v_net.compile()
 
     def __init__(self):
         self.p_net = p_net().to(hypers.device)
@@ -270,8 +270,9 @@ class main:
 
     def process_sample(self): # sample and process some items of the sample
         states,actions,values,v_policy,v_target,advantages,log_prob,pos_probs,num_probs = self.memory.sample(hypers.minibatch)
-        actions = actions.transpose(1, 2).flatten(0,1)
-        advantages = advantages.flatten().unsqueeze(-1)
+     
+      
+        #advantages = advantages.flatten()
         return (
             process_obs(states),
             actions,
@@ -297,22 +298,24 @@ class main:
                 v_target_list = []
             
                 for _ in range(hypers.batchsize//hypers.minibatch):
-                    states,actions,values,_,_,advantages,log_prob,_,_ = self.process_sample()
-                    v_target = advantages + values 
-                    
+                    states,actions,values,_,_,advantages,log_prob,_,_ = self.memory.sample(hypers.minibatch)
+                    assert advantages.shape == values.shape
+                    v_target = advantages + values
+                                
                     for _ in range(hypers.optim_steps): # sample reuse N_pi = 32, as seen in the paper
-                        pos_data,num_data,_ = self.p_net(states)
+                    
+                        pos_data,num_data,_ = self.p_net(process_obs(states))
                         new_log_prob = pos_data[0].log_prob(pos_data[1]) + num_data[0].log_prob(num_data[1]) 
                         
                         assert new_log_prob.shape == log_prob.squeeze().shape
-                        ratio = torch.exp(new_log_prob - log_prob.squeeze()).unsqueeze(-1)  
+                        ratio = torch.exp(new_log_prob - log_prob.squeeze()) 
                         
                         assert ratio.shape == advantages.shape, f"{ratio.shape} != {advantages.shape}" 
                         p1 = ratio * advantages
                         p2 = torch.clamp(ratio,1-hypers.epsilon,1+hypers.epsilon) * advantages 
                         loss_policy = - torch.mean(torch.min(p1,p2))
              
-                        new_values = self.v_net(states) 
+                        new_values = self.v_net(process_obs(states)) 
                         loss_value = F.smooth_l1_loss(new_values.squeeze(), v_target)
                         
                         entropy = (pos_data[0].entropy() + num_data[0].entropy()).mean() 
@@ -334,13 +337,13 @@ class main:
                 self.memory.update_pos_prob(torch.stack(frozen_pos_probs))
                 self.memory.update_num_prob(torch.stack(frozen_num_probs))
                 self.memory.update_v_target(torch.stack(v_target_list)) 
-           
+            
                 for _ in range(hypers.e_aux): # auxiliary phase 
                     for _ in range(hypers.batchsize//hypers.minibatch):   
-                        states,actions,_,v_policy,v_targets,_,log_prob,pos_probs,num_probs = self.process_sample()
+                        states,actions,_,v_policy,v_targets,_,log_prob,pos_probs,num_probs = self.memory.sample(hypers.minibatch)
                         
                         l_v_aux = F.smooth_l1_loss(v_policy,v_targets) 
-                        pos_data,num_data,_ = self.p_net(states) 
+                        pos_data,num_data,_ = self.p_net(process_obs(states)) 
 
                         new_pos_probs = pos_data[0] # already an instance of the Categorical class
                         old_pos_probs = pos_probs.flatten(0,1)
@@ -357,7 +360,7 @@ class main:
                         kl_div = (pos_kl + num_kl).mean()
                         l_joint = l_v_aux + (hypers.beta_clone * kl_div) 
                         
-                        new_values = self.v_net(states) 
+                        new_values = self.v_net(process_obs(states)) 
                         l_value = F.smooth_l1_loss(new_values,v_targets) 
                  
                         loss_aux = l_joint + l_value
