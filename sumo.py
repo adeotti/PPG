@@ -39,17 +39,20 @@ class Hypers:
     
 hypers = Hypers()
 
+
 def env():
     def fn():
         x = gym.make("sudoku-v0",horizon=hypers.horizon)
         return x 
     return AsyncVectorEnv([fn for _ in range(hypers.num_envs)])
 
+
 def process_obs(x): # -> one hot encoding + mask
-    x = torch.tensor(x,dtype=torch.int64,device=hypers.device)
+    x = x.long() 
     m = (x == 0).unsqueeze(1).to(torch.float32)
     x = F.one_hot(x,num_classes=10).permute(0,-1,1,2).float() 
     return torch.cat([x,m],dim=1) 
+
 
 @torch.no_grad()
 def w_init(l):
@@ -148,7 +151,7 @@ class memory: # Replay buffer class
         self.advantages = torch.empty((B,N),device=hypers.device,dtype=torch.float32) 
 
         self.env = env
-        self._observation = self.env.reset()[0]
+        self._observation = torch.as_tensor(self.env.reset()[0],device=hypers.device) 
         self.p_net = p_net
         self.v_net = v_net
         self.gamma = hypers.gamma   
@@ -192,7 +195,8 @@ class memory: # Replay buffer class
         self.rewards[num_it].copy_(torch.as_tensor(reward))
         self.dones[num_it].copy_(torch.as_tensor(done)) 
         
-        self._observation = state  
+        self._observation = state 
+        self._observation = torch.as_tensor(state,device=hypers.device)
    
     #@torch.compile()
     @torch.no_grad()
