@@ -268,23 +268,6 @@ class main:
         }
         torch.save(data,f"./model-{n}")
 
-    def process_sample(self): # sample and process some items of the sample
-        states,actions,values,v_policy,v_target,advantages,log_prob,pos_probs,num_probs = self.memory.sample(hypers.minibatch)
-     
-      
-        #advantages = advantages.flatten()
-        return (
-            process_obs(states),
-            actions,
-            values,
-            v_policy,
-            v_target,
-            advantages,
-            log_prob,
-            pos_probs,
-            num_probs
-        )
-
     def run(self,start=False):
         if start:
             for n in tqdm(range(hypers.max_steps),total=hypers.max_steps):
