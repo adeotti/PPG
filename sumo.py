@@ -23,19 +23,19 @@ warnings.filterwarnings("ignore")
 @dataclass(frozen=False)
 class Hypers:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    horizon = 3#300
-    num_envs = 2#10
-    max_steps = 30#30_000
-    batchsize = 10#512
-    minibatch = 5#32
-    e_aux = 1#6
+    horizon = 300
+    num_envs = 10
+    max_steps = 30_000
+    batchsize = 512
+    minibatch = 32
+    e_aux = 6
     lr = 5e-4
     gamma = .99
     lambda_ = .99
     epsilon = .2
     beta = 1e-1         # entropy coeff
     beta_clone = 1      # kl coeff in the aux phase
-    optim_steps = 1#10    # defualt 32 as seen in the original paper
+    optim_steps = 10    # defualt 32 as seen in the original paper
     
 hypers = Hypers()
 
@@ -198,7 +198,7 @@ class memory: # Replay buffer class
         self._observation = state 
         self._observation = torch.as_tensor(state,device=hypers.device)
    
-    #@torch.compile()
+    @torch.compile()
     @torch.no_grad()
     def compute_advantage(self): 
         next_value = self.v_net(process_obs(self._observation)).unsqueeze(0) 
@@ -250,8 +250,8 @@ class main:
         self.p_net.apply(w_init)
         self.v_net.apply(w_init)
 
-        #self.p_net.compile()
-        #self.v_net.compile()
+        self.p_net.compile()
+        self.v_net.compile()
 
     def __init__(self):
         self.p_net = p_net().to(hypers.device)
