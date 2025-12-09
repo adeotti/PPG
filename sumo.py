@@ -146,7 +146,7 @@ class memory: # Replay buffer class
 
         self.pos_probs = torch.empty((B,N,81),device=hypers.device,dtype=torch.float32)
         self.num_probs = torch.empty((B,N,10),device=hypers.device,dtype=torch.float32) 
-        self.log_prob = torch.empty((B,N,1),device=hypers.device,dtype=torch.float32)
+        self.log_prob = torch.empty((B,N),device=hypers.device,dtype=torch.float32)
 
         self.advantages = torch.empty((B,N),device=hypers.device,dtype=torch.float32) 
 
@@ -168,7 +168,7 @@ class memory: # Replay buffer class
         self.num_probs[num_it].copy_(num_data[0].probs)
         # joint probability distribution
         log_prob = pos_data[0].log_prob(pos_data[1]) + num_data[0].log_prob(num_data[1])
-        self.log_prob[num_it].copy_(log_prob.unsqueeze(-1))
+        self.log_prob[num_it].copy_(log_prob)
         
         value = self.v_net(process_obs(self._observation))
         
@@ -289,15 +289,13 @@ class main:
                     assert advantages.shape == values.shape
                     v_target = advantages + values
                                 
-                    for _ in range(hypers.optim_steps): # sample reuse N_pi = 32, as seen in the paper
-                    
+                    for _ in range(hypers.optim_steps): # sample reuse N_pi = 32, as seen in the paper 
                         pos_data,num_data,_ = self.p_net(process_obs(states))
                         new_log_prob = pos_data[0].log_prob(pos_data[1]) + num_data[0].log_prob(num_data[1]) 
+                        assert new_log_prob.shape == log_prob.shape
                         
-                        assert new_log_prob.shape == log_prob.squeeze().shape
                         ratio = torch.exp(new_log_prob - log_prob.squeeze()) 
-                        
-                        assert ratio.shape == advantages.shape, f"{ratio.shape} != {advantages.shape}" 
+                        assert ratio.shape == advantages.shape
                         p1 = ratio * advantages
                         p2 = torch.clamp(ratio,1-hypers.epsilon,1+hypers.epsilon) * advantages 
                         loss_policy = - torch.mean(torch.min(p1,p2))
