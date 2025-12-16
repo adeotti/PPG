@@ -2,7 +2,9 @@ Stable retro needs to be called inside a wsl when working on windows, this code 
 installation : 
 
 Enables wsl features 
-```wsl --intall```
+```
+wsl --intall
+```
 
 Enables wsl 2 
 ```
