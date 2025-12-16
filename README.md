@@ -1,3 +1,5 @@
+*** Installation for (windows users)***
+
 Stable retro needs to be called inside a wsl when working on windows, this code was built on top of wsl Ubuntu 24.04
 installation : 
 
@@ -39,5 +41,6 @@ Install OpenGL libraries (for rendering during testing)
 apt install -y libglu1-mesa libglu1-mesa-dev mesa-utils libgl1-mesa-dri
 ```
 
-***Code Documentation --------------***
+
+***Code Documentation ***
 
