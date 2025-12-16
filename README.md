@@ -1,11 +1,8 @@
-Build on top of wsl Ubuntu 24.4
-
-Installation : 
+Stable retro needs to be called inside a wsl when working on windows, this code was built on top of wsl Ubuntu 24.04
+installation : 
 
 Enables wsl features 
 ```wsl --intall```
-
-Install a distro (Ubuntu), some distro can be found in the microsoft store, Ubuntu 24.4 was used for this repo
 
 Enables wsl 2 
 ```
