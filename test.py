@@ -6,7 +6,7 @@ from torch.distributions import Categorical
 import numpy as np
 
 def envi():
-    x = gym.make("sudoku-v0",render_mode="human",horizon=300)
+    x = gym.make("sudoku-v0",render_mode="human",horizon=100)
     return x 
 
 def process_obs(x): 
@@ -20,13 +20,11 @@ class p_net(nn.Module):
         self.c1 = nn.LazyConv2d(64,1,1)
         self.c2 = nn.LazyConv2d(128,3,1,padding=1)
         self.c3 = nn.LazyConv2d(128,3,1,padding=1)
-
         self.emb = nn.Parameter(torch.zeros(1,81,128))
         self.attn = nn.MultiheadAttention(128,4,batch_first=True)
         self.norm = nn.LayerNorm(128)
         self.l1 = nn.LazyLinear(128)
         self.l2 = nn.LazyLinear(128)
- 
         self.pos = nn.LazyLinear(1)
         self.num = nn.LazyLinear(10)
         self.v_aux = nn.LazyLinear(1) 
@@ -60,13 +58,15 @@ class p_net(nn.Module):
 
 policy = p_net()
 policy(process_obs(torch.randint(0,9,(1,9,9))))
-policy.load_state_dict(torch.load("./model-4000",map_location="cpu"),strict=False)
+t_policy = torch.load("./model-4000",map_location="cpu")["policy state"]
+policy.load_state_dict(t_policy,strict=False)
 
 env = envi()
 obs = env.reset()[0]
 r = 0
 for n in range(2_000):
     pos,num = policy(process_obs(torch.tensor(obs,dtype=torch.int64).unsqueeze(0)))
+    v(process_obs(torch.tensor(obs,dtype=torch.int64).unsqueeze(0)))
     xpos = pos // 9 ; ypos = pos % 9
     action = np.stack((xpos,ypos,num),axis=-1).reshape(3)
     obs,reward,done,_,_ = env.step(action)
