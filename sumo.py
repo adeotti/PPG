@@ -19,11 +19,12 @@ os.environ["QT_LOGGING_RULES"] = "*.debug=false;*.warning=false"
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 os.environ["PYTHONOPTIMIZE"] = "1" # also disable asserts
 warnings.filterwarnings("ignore")
+torch.set_printoptions(precision=4, sci_mode=False)
 
 @dataclass(frozen=False)
 class Hypers:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    horizon = 300
+    horizon = 100
     num_envs = 10
     max_steps = 30_000
     batchsize = 512
@@ -39,20 +40,17 @@ class Hypers:
     
 hypers = Hypers()
 
-
 def env():
     def fn():
         x = gym.make("sudoku-v0",horizon=hypers.horizon)
         return x 
     return AsyncVectorEnv([fn for _ in range(hypers.num_envs)])
 
-
 def process_obs(x): # -> one hot encoding + mask
     x = x.long() 
-    m = (x == 0).unsqueeze(1).to(torch.float32)
+    m = (x == 0).unsqueeze(1).float()
     x = F.one_hot(x,num_classes=10).permute(0,-1,1,2).float() 
     return torch.cat([x,m],dim=1) 
-
 
 @torch.no_grad()
 def w_init(l):
@@ -76,14 +74,14 @@ class p_net(nn.Module):
  
         self.pos = nn.LazyLinear(1)
         self.num = nn.LazyLinear(10)
-        self.v_aux = nn.LazyLinear(1) # auxiliary value head
+        self.v_aux = nn.LazyLinear(1) 
     
     def forward(self,x):
         x = self.c1(x)
         x = F.silu(self.c2(x))  
         x = F.silu(self.c3(x))
         x = x.flatten(2).transpose(-1,1) # -> torch.Size([1,81,128])
-    
+
         x = x + self.emb 
         x,_ = self.attn(x,x,x)  
         x = self.norm(x)
@@ -123,12 +121,12 @@ class v_net(nn.Module):
         self.v = nn.LazyLinear(1)  
 
     def forward(self,x):
-        x = F.relu(self.c1(x)) 
-        x = F.relu(self.c2(x)) # -> torch.Size([n env, 3136])
-        x = F.relu(self.l1(x.flatten(start_dim=1)))
-        x = F.relu(self.l2(x))
-        return self.v(x).squeeze() 
-
+        x = F.silu(self.c1(x))
+        x = F.silu(self.c2(x)) # -> torch.Size([n env, 3136])
+        x = F.silu(self.l1(x.flatten(start_dim=1)))
+        x = F.silu(self.l2(x))
+        return self.v(x).squeeze()
+        
 
 class memory: # Replay buffer class
     def __init__(self,env:AsyncVectorEnv,p_net,v_net):
@@ -194,8 +192,7 @@ class memory: # Replay buffer class
         self.values_aux[num_it].copy_(v_policy)
         self.rewards[num_it].copy_(torch.as_tensor(reward))
         self.dones[num_it].copy_(torch.as_tensor(done)) 
-        
-        self._observation = state 
+         
         self._observation = torch.as_tensor(state,device=hypers.device)
    
     @torch.compile()
@@ -224,16 +221,16 @@ class memory: # Replay buffer class
             self.pos_probs[idx],
             self.num_probs[idx]
         )
-  
-    def update_pos_prob(self,x):  
+
+    def update_pos_prob(self,x):
         x = x.reshape(*self.pos_probs.shape) 
         self.pos_probs = x
 
-    def update_num_prob(self,x):
+    def update_num_prob(self,x): 
         x = x.reshape(*self.num_probs.shape)
         self.num_probs = x
 
-    def update_v_target(self,x): # update v target preallocated space 
+    def update_v_target(self,x): 
         x = x.reshape(*self.v_target.shape) 
         self.v_target = x
  
@@ -243,15 +240,12 @@ class memory: # Replay buffer class
 
 class main:
     def init_nets(self):
-        random = torch.randint(0,9,(self.env.reset()[0].shape))  
+        random = torch.randint(0,9,(self.env.reset()[0].shape),device=hypers.device)  
         self.p_net(process_obs(random))
         self.v_net(process_obs(random))
     
-        self.p_net.apply(w_init)
-        self.v_net.apply(w_init)
-
-        self.p_net.compile()
-        self.v_net.compile()
+        self.p_net.apply(w_init) ; self.p_net.compile() 
+        self.v_net.apply(w_init) ; self.v_net.compile()
 
     def __init__(self):
         self.p_net = p_net().to(hypers.device)
@@ -259,9 +253,7 @@ class main:
         self.env = env() 
         self.init_nets()
         self.memory = memory(self.env,self.p_net,self.v_net)
-        self.optim = Adam(
-                chain(self.p_net.parameters(),self.v_net.parameters()),lr=hypers.lr
-        )    
+        self.optim = Adam(chain(self.p_net.parameters(),self.v_net.parameters()),lr=hypers.lr)    
         self.writter = SummaryWriter("./")
 
     def save(self,n):
