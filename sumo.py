@@ -309,6 +309,7 @@ class main:
                     self.writter.add_scalar("main/Loss policy",loss_policy)
                     self.writter.add_scalar("main/Loss value",loss_value)
                     self.writter.add_scalar("main/total loss",loss)
+                    self.writter.add_scalar("main/entropy",entropy)
                     self.writter.add_scalar("main/episode rewards",self.memory.traj_reward()[0].mean())
 
                 self.memory.update_pos_prob(torch.stack(frozen_pos_probs))
