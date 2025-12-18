@@ -23,6 +23,7 @@ from tqdm import tqdm
 class Hypers:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_envs = 2
+    batch_size = 4
 
 hypers = Hypers()
 
@@ -78,15 +79,58 @@ class value(nn.module):
         return self.l3(x)
 
 class replay_buffer
-    def __init__(self,env,policy,value):
-        pass
+    def __init__(self,env,policy_net,value_net):
+        self.env = env
+
+        self.states = torch.empty(
+                (hypers.batch_size,*self.env.reset()[0].shape,device=hypers.device,dtype=torch.float32
+        )
+        self.actions = torch.empty((hypers.bacth_size,),device=hypers.device,dtype=torch.float32)
+        self.rewards = torch.empty((hypers.bacth_size,),device=hypers.device,dtype=torch.float32)
+        self.dones = torch.empty((hypers.bacth_size,),device=hypers.device,dtype=torch.float32)
+        self.advantages = torch.empty((hypers.bacth_size,),device=hypers.device,dtype=torch.float32)
+        self.probs = torch.empty((hypers.bacth_size,),device=hypers.device,dtype=torch.float32)
+        self.log_probs = torch.empty((hypers.bacth_size,),device=hypers.device,dtype=torch.float32)
+        self.values = torch.empty((hypers.bacth_size,),device=hypers.device,dtype=torch.float32)
+        self.vaux = torch.empty((hypers.bacth_size,),device=hypers.device,dtype=torch.float32)
+
+        self.obs = process_obs(env.reset()[0])
+        self.policy_net = policy_net
+        self.value_net = value_net
+
+        self.ep_reward_buffer = torch.zeros((hypers.batch,))
+        self.ep_reward = deque(maxlen=10)
     
     @torch.no_grad()
-    def step(self):
+    def step(self,num_it):
+        p_dist,vaux = self.policy(self.obs)
+        value = self.value_net(self.obs)
+        dist = Categorical(probs=p_dist)
+        sample = dist.sample()
+
+        nx_states,reward,dones,_,_ = self.env.step(sample.cpu().numpy())
+        self.ep_reward_buffer += torch.as_tensor(reward)
+        if np.all(reward) : self.ep_reward.append(self.ep_reward_buffer.tolist())
+            
+        self.states[num_it].copy_(self.obs)
+        self.actions[num_it].copy_(sample)
+        self.rewards[num_it].copy_(reward)
+        self.dones[num_it].copy_(dones)
+        self.probs[num_it].copy_(p_dist)
+        self.log_probs[num_it].copy_(dist.log_prob(sample))
+        self.values[num_it].copy_(value)
+        self.vaux[num_it].copy_(vaux)
+
+        self.obs = process_obs(nx_states)
+        
+    def advantages(self):
         pass
 
-    def advantages(self)
-        pass
+    def sample(self):
+        return None
+
+
+
 
 
 
