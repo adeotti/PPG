@@ -77,3 +77,17 @@ class value(nn.module):
         x = F.silu(self.l2(x))
         return self.l3(x)
 
+class replay_buffer
+    def __init__(self,env,policy,value):
+        pass
+    
+    @torch.no_grad()
+    def step(self):
+        pass
+
+    def advantages(self)
+        pass
+
+
+
+
