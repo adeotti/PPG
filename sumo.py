@@ -240,16 +240,16 @@ class memory: # Replay buffer class
 
 class main:
     def init_nets(self):
-        random = torch.randint(0,9,(self.env.reset()[0].shape),device=hypers.device)  
-        self.p_net(process_obs(random))
-        self.v_net(process_obs(random))
+        self.p_net = p_net().to(hypers.device)
+        self.v_net = v_net().to(hypers.device)
+    
+        self.p_net(process_obs(torch.randint(0,9,(self.env.reset()[0].shape),device=hypers.device)))
+        self.v_net(process_obs(torch.randint(0,9,(self.env.reset()[0].shape),device=hypers.device)))
     
         self.p_net.apply(w_init) ; self.p_net.compile() 
         self.v_net.apply(w_init) ; self.v_net.compile()
 
     def __init__(self):
-        self.p_net = p_net().to(hypers.device)
-        self.v_net = v_net().to(hypers.device)
         self.env = env() 
         self.init_nets()
         self.memory = memory(self.env,self.p_net,self.v_net)
@@ -263,6 +263,11 @@ class main:
             "value optim":self.optim.state_dict()
         }
         torch.save(data,f"./model-{n}")
+
+    def load(self):
+        self.p_net.load_state_dict(torch.load(),strict=True)
+        self.v_net.load_state_dict(torch.load(),strict=True)
+        self.optim.load_state_dict(torch.load())
 
     def run(self,start=False):
         if start:
