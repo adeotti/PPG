@@ -24,6 +24,7 @@ class Hypers:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_envs = 2
     batch_size = 4
+    mini_batch = 2
 
 hypers = Hypers()
 
@@ -123,11 +124,29 @@ class replay_buffer
 
         self.obs = process_obs(nx_states)
         
-    def advantages(self):
-        pass
+    @torch.compile()
+    @torch.no_grad()
+    def compute_advantage(self): 
+        next_value = self.v_net(process_obs(self._observation)).unsqueeze(0) 
+        _values = torch.cat([self.values,next_value]).squeeze(-1)
+        gae = torch.zeros_like(self.rewards[0], device=hypers.device)
+        td = self.rewards.clone().add_(self.gamma * _values[1:] * (1 - self.dones)).sub_(_values[:-1])
+        for n in reversed(range(len(self.rewards))): 
+            gae.mul_(self._lambda_ * self.gamma * (1-self.dones[n])).add_(td[n])
+            self.advantages[n].copy_(gae) 
 
-    def sample(self):
-        return None
+    def sample(self,minibatch):
+        idx = torch.randperm(hypers.batch_size)[:minibatch]
+        return (
+            self.states[idx]
+            self.actions[idx]
+            self.rewards[idx]
+            self.dones[idx]
+            self.probs[idx]
+            self.log_probs[idx]
+            self.values[idx]
+            self.vaux[idx]
+        )
 
 
 
