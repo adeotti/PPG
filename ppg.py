@@ -25,6 +25,7 @@ class Hypers:
     num_envs = 2
     batch_size = 4
     mini_batch = 2
+    lr = 1e-4
 
 hypers = Hypers()
 
@@ -38,6 +39,7 @@ def vec():
 
 def process_obs(x):
     return torch.as_tensor(x,device=hypers.device,dtype=torch.float).unsqueeze(1)
+
 
 class policy(nn.Module):
     def __init__(self):
@@ -78,6 +80,7 @@ class value(nn.module):
         x = F.silu(self.l1(x.flatten(1)))
         x = F.silu(self.l2(x))
         return self.l3(x)
+
 
 class replay_buffer
     def __init__(self,env,policy_net,value_net):
@@ -149,6 +152,38 @@ class replay_buffer
         )
 
 
+class main:
+    def init_nets(self):
+        self.policy_net = policy().to(hypers.device)
+        self.value_net = value().to(hypers.device)
+        
+        self.policy_net(process_obs(torch.rand(*(self.env.reset[0]),device=hypers.device))
+        self.value_net(process_obs(torch.rand(*(self.env.reset[0]),device=hypers.device))
+        
+        # self.policy_net.apply(init)
+        # self.value_net.apply(init)
+
+        # self.policy_net.compile()
+        # self.value_net.compile()
+
+    def __init__(self):
+        self.env = vec()
+        self.init_nets()
+        self.optim = Adam(chain(self.policy_net.parameters(),self.value_net.parameters()),lr=hypers.lr)
+        self.buffer = replay_buffer(self.env,self.policy_net,self.value_net)
+        # self.writer = SummaryWriter("./")
+
+    def save(self,n):
+        data = {
+            "policy state": self.policy_net.state_dict(),
+            "value state" : self.value_net.state_dict(),
+            "optim state" : self.optim.state_dict()
+        }
+        torch.save(data,f"./model-{n}")
+
+    def train(self,start=False):
+        if start:
+            pass
 
 
 
