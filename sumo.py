@@ -76,8 +76,8 @@ class p_net(nn.Module):
         self.num = nn.LazyLinear(10)
         self.v_aux = nn.LazyLinear(1) 
     
-    def forward(self,x):
-        x = self.c1(x)
+    def forward(self,s):
+        x = self.c1(s)
         x = F.silu(self.c2(x))  
         x = F.silu(self.c3(x))
         x = x.flatten(2).transpose(-1,1) # -> torch.Size([1,81,128])
@@ -89,14 +89,15 @@ class p_net(nn.Module):
         x = F.silu(self.l2(x))
                
         pos = self.pos(x).squeeze(-1) # cell position block
+        pos = self.pos_mask(s,pos)
         pos = F.softmax(pos,-1)
-        dist_post = Categorical(probs=pos)
-        sample_pos = dist_post.sample()
+        dist_pos = Categorical(probs=pos)
+        sample_pos = dist_pos.sample()
         
         num_logits = self.num(x)  # cell value block
         idx = torch.arange(x.size(0),device=x.device)
         o = num_logits[idx,sample_pos]
-        o = self.cll_mask(o)
+        o = self.action_mask(o)
         o = F.softmax(o,-1)
         dist_num = Categorical(probs=o)
         sample_num = dist_num.sample()
@@ -104,11 +105,17 @@ class p_net(nn.Module):
         v_aux = self.v_aux(x.mean(1))                        
         return (dist_post,sample_pos),(dist_num,sample_num),v_aux.squeeze()
 
-    def cll_mask(self,x): # min(cell value) = 1 
-        m = torch.zeros_like(x,dtype=torch.bool)   
-        m[:,0] = True
+    def pos_mask(self,s,x):
+        s = s.argmax(1)
+        mask = (s!=0).flatten(1)
         value = -float("inf")
-        return torch.masked_fill(x,m,value)
+        return torch.masked_fill(x,mask,value)
+
+    def action_mask(self,x): # min(cell value) = 1 
+        mask = torch.zeros_like(x,dtype=torch.bool)   
+        mask[:,0] = True
+        value = -float("inf")
+        return torch.masked_fill(x,mask,value)
 
 
 class v_net(nn.Module):
