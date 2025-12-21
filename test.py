@@ -29,44 +29,50 @@ class p_net(nn.Module):
         self.num = nn.LazyLinear(10)
         self.v_aux = nn.LazyLinear(1) 
     
-    def forward(self,x):
-        x = self.c1(x)
+    def forward(self,s):
+        x = self.c1(s)
         x = F.silu(self.c2(x))  
         x = F.silu(self.c3(x))
         x = x.flatten(2).transpose(-1,1) 
-        x = x + self.emb 
-        x,_ = self.attn(x,x,x)  
+        x = x + self.emb
+        x,asc = self.attn(x,x,x) 
         x = self.norm(x)
         x = F.silu(self.l1(x))
         x = F.silu(self.l2(x))
         pos = self.pos(x).squeeze(-1)
+        pos = self.pos_mask(s,pos)
         pos = F.softmax(pos,-1)
         pos = pos.argmax().item() 
         num_logits = self.num(x)  
         idx = torch.arange(x.size(0),device=x.device)
         o = num_logits[idx,pos]
-        o = self.cll_mask(o)
+        o = self.action_mask(o)
         o = F.softmax(o,-1)
         num = o.argmax().item()                      
-        return pos,num
+        return pos,num,asc
 
-    def cll_mask(self,x):
-        m = torch.zeros_like(x,dtype=torch.bool)   
-        m[:,0] = True
+    def pos_mask(self,s,x): # masks untouchable cells
+        s = s.argmax(1)
+        mask = (s!=0).flatten(1)
         value = -float("inf")
-        return torch.masked_fill(x,m,value)
+        return torch.masked_fill(x,mask,value)
+
+    def action_mask(self,x): # min(cell value) = 1 
+        mask = torch.zeros_like(x,dtype=torch.bool)   
+        mask[:,0] = True
+        value = -float("inf")
+        return torch.masked_fill(x,mask,value)
 
 policy = p_net()
 policy(process_obs(torch.randint(0,9,(1,9,9))))
-t_policy = torch.load("./model-4000",map_location="cpu")["policy state"]
+t_policy = torch.load("./model-2000",map_location="cpu")["policy state"]
 policy.load_state_dict(t_policy,strict=False)
 
 env = envi()
 obs = env.reset()[0]
 r = 0
 for n in range(2_000):
-    pos,num = policy(process_obs(torch.tensor(obs,dtype=torch.int64).unsqueeze(0)))
-    v(process_obs(torch.tensor(obs,dtype=torch.int64).unsqueeze(0)))
+    pos,num,attn = policy(process_obs(torch.tensor(obs,dtype=torch.int64).unsqueeze(0)))
     xpos = pos // 9 ; ypos = pos % 9
     action = np.stack((xpos,ypos,num),axis=-1).reshape(3)
     obs,reward,done,_,_ = env.step(action)
