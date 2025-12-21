@@ -83,7 +83,8 @@ class p_net(nn.Module):
         x = x.flatten(2).transpose(-1,1) # -> torch.Size([1,81,128])
 
         x = x + self.emb 
-        x,_ = self.attn(x,x,x)  
+        x,_= self.attn(x,x,x,average_attn_weights=True) 
+        sys.exit(asc.shape)
         x = self.norm(x)
         x = F.silu(self.l1(x))
         x = F.silu(self.l2(x))
@@ -103,9 +104,9 @@ class p_net(nn.Module):
         sample_num = dist_num.sample()
 
         v_aux = self.v_aux(x.mean(1))                        
-        return (dist_post,sample_pos),(dist_num,sample_num),v_aux.squeeze()
+        return (dist_pos,sample_pos),(dist_num,sample_num),v_aux.squeeze()
 
-    def pos_mask(self,s,x):
+    def pos_mask(self,s,x): # mask untouchable cells
         s = s.argmax(1)
         mask = (s!=0).flatten(1)
         value = -float("inf")
@@ -116,7 +117,6 @@ class p_net(nn.Module):
         mask[:,0] = True
         value = -float("inf")
         return torch.masked_fill(x,mask,value)
-
 
 class v_net(nn.Module):
     def __init__(self):
@@ -271,10 +271,10 @@ class main:
         }
         torch.save(data,f"./model-{n}")
 
-    def load(self):
-        self.p_net.load_state_dict(torch.load(),strict=True)
-        self.v_net.load_state_dict(torch.load(),strict=True)
-        self.optim.load_state_dict(torch.load())
+    def load(self,path):
+        self.p_net.load_state_dict(torch.load(path),strict=True)
+        self.v_net.load_state_dict(torch.load(path),strict=True)
+        self.optim.load_state_dict(torch.load(path))
 
     def run(self,start=False):
         if start:
@@ -366,4 +366,4 @@ class main:
                     self.save(n)
 
 if __name__ == "__main__":
-    main().run(start=True)
+    main().run(start=False)
