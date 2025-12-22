@@ -84,7 +84,6 @@ class p_net(nn.Module):
 
         x = x + self.emb 
         x,_= self.attn(x,x,x,average_attn_weights=True) 
-        sys.exit(asc.shape)
         x = self.norm(x)
         x = F.silu(self.l1(x))
         x = F.silu(self.l2(x))
@@ -273,8 +272,8 @@ class main:
 
     def load(self,path):
         self.p_net.load_state_dict(torch.load(path),strict=True)
-        self.v_net.load_state_dict(torch.load(path),strict=True)
-        self.optim.load_state_dict(torch.load(path))
+        self.v_net.load_state_dict(torch.load(),strict=True)
+        self.optim.load_state_dict(torch.load())
 
     def run(self,start=False):
         if start:
