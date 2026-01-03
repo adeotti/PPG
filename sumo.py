@@ -17,26 +17,25 @@ from tqdm import tqdm
 
 os.environ["QT_LOGGING_RULES"] = "*.debug=false;*.warning=false"
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
-os.environ["PYTHONOPTIMIZE"] = "1" # also disable asserts
 warnings.filterwarnings("ignore")
 torch.set_printoptions(precision=4, sci_mode=False)
 
 @dataclass(frozen=False)
 class Hypers:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    horizon = 4#100
-    num_envs = 2#10
-    max_steps = 10#10_000
-    batchsize = 20#512`
-    minibatch = 4#32
+    horizon = 100
+    num_envs = 10
+    max_steps = 10_000
+    batchsize = 512
+    minibatch = 32
     e_aux = 6
     lr = 5e-4
     gamma = .99
     lambda_ = .99
     epsilon = .2
-    beta = 5e-1         # entropy coeff
-    beta_clone = 1      # kl coeff in the aux phase
-    optim_steps = 2#5    # defualt 32 as seen in the original paper
+    beta = 5e-1     # entropy coeff
+    beta_clone = 1  # kl coeff in the aux phase
+    optim_steps = 5 # defualt 32 as seen in the original paper
     
 hypers = Hypers()
 
@@ -204,7 +203,7 @@ class memory: # Replay buffer class
          
         self._observation = torch.as_tensor(state,device=hypers.device)
    
-    #@torch.compile()
+    @torch.compile()
     @torch.no_grad()
     def compute_advantage(self): 
         next_value = self.v_net(process_obs(self._observation)).unsqueeze(0) 
@@ -255,8 +254,8 @@ class main:
         self.p_net(process_obs(torch.randint(0,9,(self.env.reset()[0].shape),device=hypers.device)))
         self.v_net(process_obs(torch.randint(0,9,(self.env.reset()[0].shape),device=hypers.device)))
     
-        #self.p_net.apply(w_init) ; self.p_net.compile() 
-        #self.v_net.apply(w_init) ; self.v_net.compile()
+        self.p_net.apply(w_init) ; self.p_net.compile() 
+        self.v_net.apply(w_init) ; self.v_net.compile()
 
     def __init__(self):
         self.env = env() 
@@ -334,8 +333,9 @@ class main:
             
                 for _ in range(hypers.e_aux): # auxiliary phase 
                     for _ in range(hypers.batchsize//hypers.minibatch):   
-                        states,actions,_,v_policy,v_targets,_,log_prob,pos_logits,num_logits = self.memory.sample(hypers.minibatch)
-                         
+                        states,actions,_,v_policy,v_targets,_,log_prob,pos_logits,num_logits = self.memory.sample(
+                                hypers.minibatch
+                        ) 
                         l_v_aux = F.smooth_l1_loss(v_policy,v_targets) 
                         pos_data,num_data,_ = self.p_net(process_obs(states)) 
 
