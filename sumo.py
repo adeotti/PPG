@@ -25,7 +25,7 @@ torch.set_printoptions(precision=4, sci_mode=False)
 class Hypers:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     horizon = 100
-    num_envs = 10
+    num_envs = 5
     max_steps = 30_000
     batchsize = 512
     minibatch = 32
@@ -34,7 +34,7 @@ class Hypers:
     gamma = .99
     lambda_ = .99
     epsilon = .2
-    beta = 1e-1         # entropy coeff
+    beta = 5e-1         # entropy coeff
     beta_clone = 1      # kl coeff in the aux phase
     optim_steps = 10    # defualt 32 as seen in the original paper
     
@@ -185,7 +185,7 @@ class memory: # Replay buffer class
         state,reward,done,_,_ = self.env.step(action)
         reward = np.round(reward,2)
                     
-        self.episode_reward += reward  # tracking episode rewards and total steps
+        self.episode_reward += reward
         self.total_steps += 1 
         done_envs = np.where(done==True)[0]
         if done_envs.shape[0] > 0:
@@ -287,7 +287,7 @@ class main:
                 frozen_num_probs = []
                 v_target_list = []
             
-                for _ in range(hypers.batchsize//hypers.minibatch):
+                for i in range(hypers.batchsize//hypers.minibatch):
                     states,actions,values,_,_,advantages,log_prob,_,_ = self.memory.sample(hypers.minibatch)
                     assert advantages.shape == values.shape
                     v_target = advantages + values
@@ -317,11 +317,13 @@ class main:
                     frozen_num_probs.append(num_data[0].probs)
                     v_target_list.append(v_target)
                     
-                    self.writter.add_scalar("main/Loss policy",loss_policy)
-                    self.writter.add_scalar("main/Loss value",loss_value)
-                    self.writter.add_scalar("main/total loss",loss)
-                    self.writter.add_scalar("main/entropy",entropy)
-                    self.writter.add_scalar("main/episode rewards",self.memory.traj_reward()[0].mean())
+                    if i%50 == 0:
+                        self.writter.add_scalar("main/Loss policy",loss_policy)
+                        self.writter.add_scalar("main/Loss value",loss_value)
+                        self.writter.add_scalar("main/total loss",loss)
+                        self.writter.add_scalar("main/entropy",entropy)
+                        self.writter.add_scalar("main/action variance",actions.var())
+                        self.writter.add_scalar("main/episode rewards",self.memory.traj_reward()[0].mean())
 
                 self.memory.update_pos_prob(torch.stack(frozen_pos_probs))
                 self.memory.update_num_prob(torch.stack(frozen_num_probs))
