@@ -25,8 +25,8 @@ torch.set_printoptions(precision=4, sci_mode=False)
 class Hypers:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     horizon = 100
-    num_envs = 5
-    max_steps = 30_000
+    num_envs = 10
+    max_steps = 10_000
     batchsize = 512
     minibatch = 32
     e_aux = 6
@@ -160,10 +160,8 @@ class memory: # Replay buffer class
         self.v_net = v_net
         self.gamma = hypers.gamma   
         self._lambda_ = hypers.lambda_ 
-        self.rewards_deque = deque(maxlen=hypers.num_envs+2)
-        self.total_steps_deque = deque(maxlen=hypers.num_envs+2)
-        self.episode_reward = torch.empty(self.env.num_envs).float()
-        self.total_steps = torch.empty(hypers.num_envs).float()
+        self.rewards_deque = deque(maxlen=1)
+        self.episode_reward = torch.zeros(self.env.num_envs)
           
     @torch.no_grad()
     def step(self,num_it):
@@ -185,12 +183,11 @@ class memory: # Replay buffer class
         state,reward,done,_,_ = self.env.step(action)
         reward = np.round(reward,2)
                     
-        self.episode_reward += reward
-        self.total_steps += 1 
+        self.episode_reward += reward*0.1 
         done_envs = np.where(done==True)[0]
-        if done_envs.shape[0] > 0:
-            self.rewards_deque.append(self.episode_reward[done_envs].tolist())
-            self.total_steps_deque.append(self.total_steps[done_envs].tolist())
+        if num_it+1 == hypers.horizon:
+            self.rewards_deque.append(self.episode_reward.mean())
+            self.episode_reward = torch.zeros(self.env.num_envs)
 
         self.state[num_it].copy_(torch.as_tensor(self._observation)) 
         self.action[num_it].copy_(torch.as_tensor(action)) 
@@ -241,7 +238,7 @@ class memory: # Replay buffer class
         self.v_target = x
  
     def traj_reward(self):
-        return list(map(torch.tensor,(self.rewards_deque,self.total_steps_deque)))
+        return torch.tensor(self.rewards_deque)
 
 
 class main:
@@ -323,7 +320,7 @@ class main:
                         self.writter.add_scalar("main/total loss",loss)
                         self.writter.add_scalar("main/entropy",entropy)
                         self.writter.add_scalar("main/action variance",actions.var())
-                        self.writter.add_scalar("main/episode rewards",self.memory.traj_reward()[0].mean())
+                        self.writter.add_scalar("main/episode rewards",self.memory.traj_reward())
 
                 self.memory.update_pos_prob(torch.stack(frozen_pos_probs))
                 self.memory.update_num_prob(torch.stack(frozen_num_probs))
