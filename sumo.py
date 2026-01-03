@@ -27,7 +27,7 @@ class Hypers:
     horizon = 4#100
     num_envs = 2#10
     max_steps = 10#10_000
-    batchsize = 20#512
+    batchsize = 20#512`
     minibatch = 4#32
     e_aux = 6
     lr = 5e-4
@@ -173,9 +173,6 @@ class memory: # Replay buffer class
         pos_data,num_data,v_policy = self.p_net(process_obs(self._observation))
         self.pos_probs[num_it].copy_(pos_data[0].probs)
         self.num_probs[num_it].copy_(num_data[0].probs)
-
-        #self.pos_logits[num_it].copy_(pos_data[-1].logits)
-        #self.num_logits[num_it].copy_(num_data[-1].logits)
 
         # joint probability distribution
         log_prob = pos_data[0].log_prob(pos_data[1]) + num_data[0].log_prob(num_data[1])
@@ -337,28 +334,26 @@ class main:
             
                 for _ in range(hypers.e_aux): # auxiliary phase 
                     for _ in range(hypers.batchsize//hypers.minibatch):   
-                        states,actions,_,v_policy,v_targets,_,log_prob,pos_logits,num_probs = self.memory.sample(hypers.minibatch)
+                        states,actions,_,v_policy,v_targets,_,log_prob,pos_logits,num_logits = self.memory.sample(hypers.minibatch)
                          
                         l_v_aux = F.smooth_l1_loss(v_policy,v_targets) 
                         pos_data,num_data,_ = self.p_net(process_obs(states)) 
 
                         new_pos_logits = pos_data[-1] # already an instance of the Categorical class
                         old_pos_logits = pos_logits.flatten(0,1)
-                        
                         assert new_pos_logits.logits.shape == old_pos_logits.shape
                         old_pos_logits = Categorical(logits=old_pos_logits)
                         pos_kl = kl(old_pos_logits,new_pos_logits)
-                    
-                        new_num_probs = num_data[0] # also an instance of the Categorical class
-                        old_num_probs = num_probs.flatten(0,1) 
-                        assert new_num_probs.probs.shape == old_num_probs.shape
-                        old_num_probs = Categorical(probs=old_num_probs)
-                        num_kl = kl(old_num_probs,new_num_probs)
-                         
-                        kl_div = (pos_kl + num_kl).mean()
-                    
-                        l_joint = l_v_aux + (hypers.beta_clone * kl_div) 
                         
+                        new_num_logits = num_data[-1] # also an instance of the Categorical class
+                        old_num_logits = num_logits.flatten(0,1) 
+                        assert new_num_logits.logits.shape == old_num_logits.shape
+                        old_num_logits = Categorical(logits=old_num_logits)
+                        num_kl = kl(old_num_logits,new_num_logits)
+                        
+                        kl_div = (pos_kl + num_kl).mean()
+                        l_joint = l_v_aux + (hypers.beta_clone * kl_div) 
+                
                         new_values = self.v_net(process_obs(states)) 
                         l_value = F.smooth_l1_loss(new_values,v_targets) 
                  
