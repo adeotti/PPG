@@ -24,11 +24,11 @@ torch.set_printoptions(precision=4, sci_mode=False)
 @dataclass(frozen=False)
 class Hypers:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    horizon = 100
-    num_envs = 10
-    max_steps = 10_000
-    batchsize = 512
-    minibatch = 32
+    horizon = 4#100
+    num_envs = 2#10
+    max_steps = 10#10_000
+    batchsize = 20#512
+    minibatch = 4#32
     e_aux = 6
     lr = 5e-4
     gamma = .99
@@ -36,7 +36,7 @@ class Hypers:
     epsilon = .2
     beta = 5e-1         # entropy coeff
     beta_clone = 1      # kl coeff in the aux phase
-    optim_steps = 10    # defualt 32 as seen in the original paper
+    optim_steps = 2#5    # defualt 32 as seen in the original paper
     
 hypers = Hypers()
 
@@ -88,22 +88,24 @@ class p_net(nn.Module):
         x = F.silu(self.l1(x))
         x = F.silu(self.l2(x))
                
-        pos = self.pos(x).squeeze(-1) # cell position block
-        pos = self.pos_mask(s,pos)
+        pre_pos = self.pos(x).squeeze(-1) # cell position block
+        pos = self.pos_mask(s,pre_pos)
         pos = F.softmax(pos,-1)
         dist_pos = Categorical(probs=pos)
+        logi_pos = Categorical(logits=pre_pos)
         sample_pos = dist_pos.sample()
         
         num_logits = self.num(x)  # cell value block
         idx = torch.arange(x.size(0),device=x.device)
-        o = num_logits[idx,sample_pos]
-        o = self.action_mask(o)
+        pre_o = num_logits[idx,sample_pos]
+        o = self.action_mask(pre_o)
         o = F.softmax(o,-1)
         dist_num = Categorical(probs=o)
+        logi_num = Categorical(logits=pre_o)
         sample_num = dist_num.sample()
 
         v_aux = self.v_aux(x.mean(1))                        
-        return (dist_pos,sample_pos),(dist_num,sample_num),v_aux.squeeze()
+        return (dist_pos,sample_pos,logi_pos),(dist_num,sample_num,logi_num),v_aux.squeeze()
 
     def pos_mask(self,s,x): # mask untouchable cells
         s = s.argmax(1)
@@ -152,6 +154,9 @@ class memory: # Replay buffer class
         self.num_probs = torch.empty((B,N,10),device=hypers.device,dtype=torch.float32) 
         self.log_prob = torch.empty((B,N),device=hypers.device,dtype=torch.float32)
 
+        self.pos_logits = torch.empty((B,N,81),device=hypers.device,dtype=torch.float32)
+        self.num_logits = torch.empty((B,N,10),device=hypers.device,dtype=torch.float32)
+
         self.advantages = torch.empty((B,N),device=hypers.device,dtype=torch.float32) 
 
         self.env = env
@@ -168,15 +173,19 @@ class memory: # Replay buffer class
         pos_data,num_data,v_policy = self.p_net(process_obs(self._observation))
         self.pos_probs[num_it].copy_(pos_data[0].probs)
         self.num_probs[num_it].copy_(num_data[0].probs)
+
+        #self.pos_logits[num_it].copy_(pos_data[-1].logits)
+        #self.num_logits[num_it].copy_(num_data[-1].logits)
+
         # joint probability distribution
         log_prob = pos_data[0].log_prob(pos_data[1]) + num_data[0].log_prob(num_data[1])
         self.log_prob[num_it].copy_(log_prob)
         
         value = self.v_net(process_obs(self._observation))
         
-        pos = pos_data[-1]
+        pos = pos_data[1]
         xpos = pos // 9 ; ypos = pos % 9
-        cell_value = num_data[-1]
+        cell_value = num_data[1]
         action = torch.stack((xpos,ypos,cell_value)).cpu().numpy() # shape -> [x_n...][y_n...][z_n...]
         # self.env.action_space.sample() >>> (array([0, 5]), array([2, 6]), array([3, 4])) 
       
@@ -198,7 +207,7 @@ class memory: # Replay buffer class
          
         self._observation = torch.as_tensor(state,device=hypers.device)
    
-    @torch.compile()
+    #@torch.compile()
     @torch.no_grad()
     def compute_advantage(self): 
         next_value = self.v_net(process_obs(self._observation)).unsqueeze(0) 
@@ -221,17 +230,17 @@ class memory: # Replay buffer class
             self.advantages[idx].flatten(),
 
             self.log_prob[idx].flatten(0,1),
-            self.pos_probs[idx],
-            self.num_probs[idx]
+            self.pos_logits[idx],
+            self.num_logits[idx]
         )
 
-    def update_pos_prob(self,x):
+    def update_pos_logits(self,x):
         x = x.reshape(*self.pos_probs.shape) 
-        self.pos_probs = x
+        self.pos_logits = x
 
-    def update_num_prob(self,x): 
+    def update_num_logits(self,x): 
         x = x.reshape(*self.num_probs.shape)
-        self.num_probs = x
+        self.num_logits = x
 
     def update_v_target(self,x): 
         x = x.reshape(*self.v_target.shape) 
@@ -249,8 +258,8 @@ class main:
         self.p_net(process_obs(torch.randint(0,9,(self.env.reset()[0].shape),device=hypers.device)))
         self.v_net(process_obs(torch.randint(0,9,(self.env.reset()[0].shape),device=hypers.device)))
     
-        self.p_net.apply(w_init) ; self.p_net.compile() 
-        self.v_net.apply(w_init) ; self.v_net.compile()
+        #self.p_net.apply(w_init) ; self.p_net.compile() 
+        #self.v_net.apply(w_init) ; self.v_net.compile()
 
     def __init__(self):
         self.env = env() 
@@ -310,8 +319,8 @@ class main:
                         loss.backward()
                         self.optim.step()
                     
-                    frozen_pos_probs.append(pos_data[0].probs)
-                    frozen_num_probs.append(num_data[0].probs)
+                    frozen_pos_probs.append(pos_data[-1].logits)
+                    frozen_num_probs.append(num_data[-1].logits)
                     v_target_list.append(v_target)
                     
                     if i%50 == 0:
@@ -322,22 +331,23 @@ class main:
                         self.writter.add_scalar("main/action variance",actions.var())
                         self.writter.add_scalar("main/episode rewards",self.memory.traj_reward())
 
-                self.memory.update_pos_prob(torch.stack(frozen_pos_probs))
-                self.memory.update_num_prob(torch.stack(frozen_num_probs))
+                self.memory.update_pos_logits(torch.stack(frozen_pos_probs))
+                self.memory.update_num_logits(torch.stack(frozen_num_probs))
                 self.memory.update_v_target(torch.stack(v_target_list)) 
             
                 for _ in range(hypers.e_aux): # auxiliary phase 
                     for _ in range(hypers.batchsize//hypers.minibatch):   
-                        states,actions,_,v_policy,v_targets,_,log_prob,pos_probs,num_probs = self.memory.sample(hypers.minibatch)
-                        
+                        states,actions,_,v_policy,v_targets,_,log_prob,pos_logits,num_probs = self.memory.sample(hypers.minibatch)
+                         
                         l_v_aux = F.smooth_l1_loss(v_policy,v_targets) 
                         pos_data,num_data,_ = self.p_net(process_obs(states)) 
 
-                        new_pos_probs = pos_data[0] # already an instance of the Categorical class
-                        old_pos_probs = pos_probs.flatten(0,1)
-                        assert new_pos_probs.probs.shape == old_pos_probs.shape
-                        old_pos_probs = Categorical(probs=old_pos_probs)
-                        pos_kl = kl(old_pos_probs,new_pos_probs)
+                        new_pos_logits = pos_data[-1] # already an instance of the Categorical class
+                        old_pos_logits = pos_logits.flatten(0,1)
+                        
+                        assert new_pos_logits.logits.shape == old_pos_logits.shape
+                        old_pos_logits = Categorical(logits=old_pos_logits)
+                        pos_kl = kl(old_pos_logits,new_pos_logits)
                     
                         new_num_probs = num_data[0] # also an instance of the Categorical class
                         old_num_probs = num_probs.flatten(0,1) 
@@ -346,6 +356,7 @@ class main:
                         num_kl = kl(old_num_probs,new_num_probs)
                          
                         kl_div = (pos_kl + num_kl).mean()
+                    
                         l_joint = l_v_aux + (hypers.beta_clone * kl_div) 
                         
                         new_values = self.v_net(process_obs(states)) 
@@ -364,4 +375,4 @@ class main:
                     self.save(n)
 
 if __name__ == "__main__":
-    main().run(start=False)
+    main().run(start=True)
