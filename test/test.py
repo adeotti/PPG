@@ -16,8 +16,9 @@ def process_obs(x):
     return torch.cat([x,m],dim=1) 
 
 class p_net(nn.Module):
-    def __init__(self):
+    def __init__(self,stochastic=True):
         super().__init__()
+        self.stochastic_policy = stochastic
         self.c1 = nn.LazyConv2d(64,1,1)
         self.c2 = nn.LazyConv2d(128,3,1,padding=1)
         self.c3 = nn.LazyConv2d(128,3,1,padding=1)
@@ -36,26 +37,20 @@ class p_net(nn.Module):
         x = F.silu(self.c3(x))
         x = x.flatten(2).transpose(-1,1) 
         x = x + self.emb
-        #print(self.emb)
         x,asc = self.attn(x,x,x) 
         x = self.norm(x)
         x = F.silu(self.l1(x))
         x = F.silu(self.l2(x))
         pos = self.pos(x).squeeze(-1)
-        #print(pos)
         pos = self.pos_mask(s,pos)
-        #print(pos)
         pos = F.softmax(pos,-1)
-        #print(pos.max())
-        pos = Categorical(probs=pos).sample()
-        #pos = pos.argmax().item() 
+        pos = Categorical(probs=pos).sample() if self.stochastic_policy else pos.argmax().item()
         num_logits = self.num(x)  
-        idx = torch.arange(x.size(0),device=x.device)
+        idx = torch.arange(x.size(0))
         o = num_logits[idx,pos]
         o = self.action_mask(o)
         o = F.softmax(o,-1)
-        #num = o.argmax().item()
-        num = Categorical(probs=o).sample()
+        num = Categorical(probs=o).sample() if self.stochastic_policy else pos.argmax().item()
         return pos,num,asc
 
     def pos_mask(self,s,x): # masks untouchable cells
@@ -71,8 +66,8 @@ class p_net(nn.Module):
         return torch.masked_fill(x,mask,value)
 
 
-def test_trained(rollout_num:int=None):
-    policy = p_net()
+def test_trained(rollout_num:int=None,stochastic=True):
+    policy = p_net(stochastic=True)
     policy(process_obs(torch.randint(0,9,(1,9,9))))
     t_policy = torch.load("./model-2000",map_location="cpu")["policy state"]
     policy.load_state_dict(t_policy,strict=False)
