@@ -6,9 +6,12 @@ from torch.distributions import Categorical
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 from datetime import datetime
+from tqdm import tqdm
+
+HORIZON = 100
 
 def envi():
-    x = gym.make("sudoku-v0",render_mode="human",horizon=100)
+    x = gym.make("sudoku-v0",render_mode="human",horizon=HORIZON)
     return x 
 
 def process_obs(x): 
@@ -69,7 +72,7 @@ class p_net(nn.Module):
 
 def test_trained(rollout_num:int=None,stochastic:bool=True):
     writter = SummaryWriter(
-            f"test/stochastic_policy_{rollout_num}_episodes_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            f"test/stochastic_policy_{rollout_num}_episodes_{datetime.now().strftime('%Y%m%d_%H%M%S')}_hor_{HORIZON}"
     )
     policy = p_net(stochastic=stochastic)
     policy(process_obs(torch.randint(0,9,(1,9,9))))
@@ -80,7 +83,7 @@ def test_trained(rollout_num:int=None,stochastic:bool=True):
     obs = env.reset()[0]
     r = 0
 
-    for n in range(rollout_num):
+    for n in tqdm(range(rollout_num),total=rollout_num):
         pos,num,attn = policy(process_obs(torch.tensor(obs,dtype=torch.int64).unsqueeze(0)))
         xpos = pos // 9 ; ypos = pos % 9
         action = np.stack((xpos,ypos,num),axis=-1).reshape(3)
@@ -88,28 +91,28 @@ def test_trained(rollout_num:int=None,stochastic:bool=True):
         #env.render()
         r+=reward
         if trunc:
-            writter.add_scalar("reward_per_ep",r)
+            writter.add_scalar("reward_per_ep",r,global_step=n/HORIZON)
             r = 0
             obs = env.reset()[0]
 
 def test_random(rollout_num:int=None):
     writter = SummaryWriter(
-            f"test/random_policy_{rollout_num}_episodes_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            f"test/random_policy_{rollout_num}_episodes_{datetime.now().strftime('%Y%m%d_%H%M%S')}_hor_{HORIZON}"
     )
     env = envi()
     obs = env.reset()[0]
     r = 0
 
-    for n in range(rollout_num): 
+    for n in tqdm(range(rollout_num),total=rollout_num): 
         obs,reward,done,trunc,_ = env.step(env.action_space.sample())
         #env.render()
         r+=reward
         if trunc:
-            writter.add_scalar("rewards_per_eps",r)
+            writter.add_scalar("reward_per_ep",r,global_step=n/HORIZON)
             r = 0
-            obs = env.reset()[0]
+            env.reset()
 
 if __name__ == "__main__":
-    episodes = 100*5
+    episodes = HORIZON*100
     test_trained(episodes,True)
     test_random(episodes)
