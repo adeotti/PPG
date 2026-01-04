@@ -71,7 +71,7 @@ class p_net(nn.Module):
         return torch.masked_fill(x,mask,value)
 
 
-def test_trained():
+def test_trained(rollout_num:int=None):
     policy = p_net()
     policy(process_obs(torch.randint(0,9,(1,9,9))))
     t_policy = torch.load("./model-2000",map_location="cpu")["policy state"]
@@ -81,7 +81,7 @@ def test_trained():
     obs = env.reset()[0]
     r = 0
 
-    for n in range(800):
+    for n in range(rollout_num):
         pos,num,attn = policy(process_obs(torch.tensor(obs,dtype=torch.int64).unsqueeze(0)))
         xpos = pos // 9 ; ypos = pos % 9
         action = np.stack((xpos,ypos,num),axis=-1).reshape(3)
@@ -91,5 +91,20 @@ def test_trained():
         if trunc:
             r = 0
             obs = env.reset()[0]
+
+def test_random(rollout_num:int=None):
+    env = envi()
+    obs = env.reset()[0]
+    r = 0
+
+    for n in range(rollout_num):
+        pos,num,attn = policy(process_obs(torch.tensor(obs,dtype=torch.int64).unsqueeze(0)))
+        obs,reward,done,trunc,_ = env.step(env.action_space.sample())
+        env.render()
+        r+=reward
+        if trunc:
+            r = 0
+            obs = env.reset()[0]
+
 
 
