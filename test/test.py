@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from torch.distributions import Categorical
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
+from datetime import datetime
 
 def envi():
     x = gym.make("sudoku-v0",render_mode="human",horizon=100)
@@ -67,6 +68,9 @@ class p_net(nn.Module):
 
 
 def test_trained(rollout_num:int=None,stochastic:bool=True):
+    writter = SummaryWriter(
+            f"test/stochastic_policy_{rollout_num}_episodes_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    )
     policy = p_net(stochastic=stochastic)
     policy(process_obs(torch.randint(0,9,(1,9,9))))
     t_policy = torch.load("./model-2000",map_location="cpu")["policy state"]
@@ -81,26 +85,31 @@ def test_trained(rollout_num:int=None,stochastic:bool=True):
         xpos = pos // 9 ; ypos = pos % 9
         action = np.stack((xpos,ypos,num),axis=-1).reshape(3)
         obs,reward,done,trunc,_ = env.step(action)
-        env.render()
+        #env.render()
         r+=reward
         if trunc:
+            writter.add_scalar("reward_per_ep",r)
             r = 0
             obs = env.reset()[0]
 
 def test_random(rollout_num:int=None):
+    writter = SummaryWriter(
+            f"test/random_policy_{rollout_num}_episodes_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    )
     env = envi()
     obs = env.reset()[0]
     r = 0
 
-    for n in range(rollout_num):
-        pos,num,attn = policy(process_obs(torch.tensor(obs,dtype=torch.int64).unsqueeze(0)))
+    for n in range(rollout_num): 
         obs,reward,done,trunc,_ = env.step(env.action_space.sample())
-        env.render()
+        #env.render()
         r+=reward
         if trunc:
+            writter.add_scalar("rewards_per_eps",r)
             r = 0
             obs = env.reset()[0]
 
 if __name__ == "__main__":
     episodes = 100*5
-    test_trained(episodes,False)
+    test_trained(episodes,True)
+    test_random(episodes)
