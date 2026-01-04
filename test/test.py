@@ -16,7 +16,7 @@ def process_obs(x):
     return torch.cat([x,m],dim=1) 
 
 class p_net(nn.Module):
-    def __init__(self,stochastic=True):
+    def __init__(self,stochastic):
         super().__init__()
         self.stochastic_policy = stochastic
         self.c1 = nn.LazyConv2d(64,1,1)
@@ -50,24 +50,24 @@ class p_net(nn.Module):
         o = num_logits[idx,pos]
         o = self.action_mask(o)
         o = F.softmax(o,-1)
-        num = Categorical(probs=o).sample() if self.stochastic_policy else pos.argmax().item()
+        num = Categorical(probs=o).sample() if self.stochastic_policy else o.argmax().item()
         return pos,num,asc
 
-    def pos_mask(self,s,x): # masks untouchable cells
+    def pos_mask(self,s,x): 
         s = s.argmax(1)
         mask = (s!=0).flatten(1)
         value = -float("inf")
         return torch.masked_fill(x,mask,value)
 
-    def action_mask(self,x): # min(cell value) = 1 
+    def action_mask(self,x): 
         mask = torch.zeros_like(x,dtype=torch.bool)   
         mask[:,0] = True
         value = -float("inf")
         return torch.masked_fill(x,mask,value)
 
 
-def test_trained(rollout_num:int=None,stochastic=True):
-    policy = p_net(stochastic=True)
+def test_trained(rollout_num:int=None,stochastic:bool=True):
+    policy = p_net(stochastic=stochastic)
     policy(process_obs(torch.randint(0,9,(1,9,9))))
     t_policy = torch.load("./model-2000",map_location="cpu")["policy state"]
     policy.load_state_dict(t_policy,strict=False)
@@ -101,5 +101,6 @@ def test_random(rollout_num:int=None):
             r = 0
             obs = env.reset()[0]
 
-
-
+if __name__ == "__main__":
+    episodes = 100*5
+    test_trained(episodes,False)
