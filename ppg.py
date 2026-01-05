@@ -1,7 +1,7 @@
 import torch,sys,os,warnings
 
 import torch.nn as nn
-from torch.distributions import Categorical
+from torch.distributions import Bernoulli
 import torch.nn.functional as F
 from torch.optim import Adam
 from torch.utils.tensorboard import SummaryWriter
@@ -23,8 +23,10 @@ from tqdm import tqdm
 class Hypers:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_envs = 2
+    max_steps = 10
     batch_size = 4
     mini_batch = 2
+    optim_steps = 2
     lr = 1e-4
 
 hypers = Hypers()
@@ -62,10 +64,11 @@ class policy(nn.Module):
         x = F.silu(self.l1(x.flatten(1)))
         x = F.silu(self.l2(x))
         x = F.silu(self.l3(x))
-        return F.sigmoid(self.l4(x)), self.vaux(x) 
+        return self.l4(x), self.vaux(x) 
 
-class value(nn.module):
+class value(nn.Module):
     def __init__(self):
+        super().__init__()
         self.c1 = nn.LazyConv2d(16,4,2,1)  
         self.c2 = nn.LazyConv2d(32,4,2,1)
         self.c3 = nn.LazyConv2d(32,3,2,1)
@@ -82,35 +85,35 @@ class value(nn.module):
         return self.l3(x)
 
 
-class replay_buffer
+class replay_buffer:
     def __init__(self,env,policy_net,value_net):
         self.env = env
 
         self.states = torch.empty(
-                (hypers.batch_size,*self.env.reset()[0].shape,device=hypers.device,dtype=torch.float32
+                (hypers.batch_size,*self.env.reset()[0].shape),device=hypers.device,dtype=torch.float32
         )
-        self.actions = torch.empty((hypers.bacth_size,),device=hypers.device,dtype=torch.float32)
-        self.rewards = torch.empty((hypers.bacth_size,),device=hypers.device,dtype=torch.float32)
-        self.dones = torch.empty((hypers.bacth_size,),device=hypers.device,dtype=torch.float32)
-        self.advantages = torch.empty((hypers.bacth_size,),device=hypers.device,dtype=torch.float32)
-        self.probs = torch.empty((hypers.bacth_size,),device=hypers.device,dtype=torch.float32)
-        self.log_probs = torch.empty((hypers.bacth_size,),device=hypers.device,dtype=torch.float32)
-        self.values = torch.empty((hypers.bacth_size,),device=hypers.device,dtype=torch.float32)
-        self.vaux = torch.empty((hypers.bacth_size,),device=hypers.device,dtype=torch.float32)
+        self.actions = torch.empty((hypers.batch_size,),device=hypers.device,dtype=torch.float32)
+        self.rewards = torch.empty((hypers.batch_size,),device=hypers.device,dtype=torch.float32)
+        self.dones = torch.empty((hypers.batch_size,),device=hypers.device,dtype=torch.float32)
+        self.advantages = torch.empty((hypers.batch_size,),device=hypers.device,dtype=torch.float32)
+        self.probs = torch.empty((hypers.batch_size,),device=hypers.device,dtype=torch.float32)
+        self.log_probs = torch.empty((hypers.batch_size,),device=hypers.device,dtype=torch.float32)
+        self.values = torch.empty((hypers.batch_size,),device=hypers.device,dtype=torch.float32)
+        self.vaux = torch.empty((hypers.batch_size,),device=hypers.device,dtype=torch.float32)
 
         self.obs = process_obs(env.reset()[0])
         self.policy_net = policy_net
         self.value_net = value_net
 
-        self.ep_reward_buffer = torch.zeros((hypers.batch,))
+        self.ep_reward_buffer = torch.zeros((hypers.batch_size,))
         self.ep_reward = deque(maxlen=10)
     
     @torch.no_grad()
     def step(self,num_it):
-        p_dist,vaux = self.policy(self.obs)
+        p_logits,vaux = self.policy_net(self.obs)
         value = self.value_net(self.obs)
-        dist = Categorical(probs=p_dist)
-        sample = dist.sample()
+        dist = Bernoulli(logits=p_logits)
+        sample = dist.sample() 
 
         nx_states,reward,dones,_,_ = self.env.step(sample.cpu().numpy())
         self.ep_reward_buffer += torch.as_tensor(reward)
@@ -130,7 +133,7 @@ class replay_buffer
     @torch.compile()
     @torch.no_grad()
     def compute_advantage(self): 
-        next_value = self.v_net(process_obs(self._observation)).unsqueeze(0) 
+        next_value = self.value_net(process_obs(self._observation)).unsqueeze(0) 
         _values = torch.cat([self.values,next_value]).squeeze(-1)
         gae = torch.zeros_like(self.rewards[0], device=hypers.device)
         td = self.rewards.clone().add_(self.gamma * _values[1:] * (1 - self.dones)).sub_(_values[:-1])
@@ -141,13 +144,13 @@ class replay_buffer
     def sample(self,minibatch):
         idx = torch.randperm(hypers.batch_size)[:minibatch]
         return (
-            self.states[idx]
-            self.actions[idx]
-            self.rewards[idx]
-            self.dones[idx]
-            self.probs[idx]
-            self.log_probs[idx]
-            self.values[idx]
+            self.states[idx],
+            self.actions[idx],
+            self.rewards[idx],
+            self.dones[idx],
+            self.probs[idx],
+            self.log_probs[idx],
+            self.values[idx],
             self.vaux[idx]
         )
 
@@ -157,14 +160,11 @@ class main:
         self.policy_net = policy().to(hypers.device)
         self.value_net = value().to(hypers.device)
         
-        self.policy_net(process_obs(torch.rand(*(self.env.reset[0]),device=hypers.device))
-        self.value_net(process_obs(torch.rand(*(self.env.reset[0]),device=hypers.device))
+        self.policy_net(process_obs(torch.rand(*(self.env.reset()[0].shape),device=hypers.device)))
+        self.value_net(process_obs(torch.rand(*(self.env.reset()[0].shape),device=hypers.device)))
         
-        # self.policy_net.apply(init)
-        # self.value_net.apply(init)
-
-        # self.policy_net.compile()
-        # self.value_net.compile()
+        # self.policy_net.apply(init) ; self.policy_net.compile()
+        # self.value_net.apply(init) ; self.value_net.compile()
 
     def __init__(self):
         self.env = vec()
@@ -183,9 +183,23 @@ class main:
 
     def train(self,start=False):
         if start:
-            pass
+            for n in tqdm(range(hypers.max_steps),total=hypers.max_steps):
+                
+                for i in range(hypers.batch_size):
+                    self.buffer.step(i)
+
+                self.buffer.compute_advantage()
+                sys.exit()
+                
+                for _ in range(hypers.batch_size//hypers.mini_batch):
+                    data = self.buffer.sample(hypers.mini_batch)
+                
+                    for _ in range(hypers.optim_steps):
+                       pass
 
 
+                
+            
 
 
 
