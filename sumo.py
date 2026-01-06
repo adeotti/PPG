@@ -23,19 +23,19 @@ torch.set_printoptions(precision=4, sci_mode=False)
 @dataclass(frozen=False)
 class Hypers:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    horizon = 100
-    num_envs = 10
-    max_steps = 10_000
-    batchsize = 512
-    minibatch = 32
-    e_aux = 6
+    horizon = 10 #100
+    num_envs = 2#10
+    max_steps = 50#10_000
+    batchsize = 20#512
+    minibatch = 5#32
+    e_aux = 1#16
     lr = 5e-4
     gamma = .99
     lambda_ = .99
     epsilon = .2
     beta = 5e-1     # entropy coeff
     beta_clone = 1  # kl coeff in the aux phase
-    optim_steps = 5 # defualt 32 as seen in the original paper
+    optim_steps = 1#5 # defualt 32 as seen in the original paper
     
 hypers = Hypers()
 
@@ -57,7 +57,6 @@ def w_init(l):
         nn.init.orthogonal_(l.weight)
         l.bias.fill_(0.0)
 
-
 class p_net(nn.Module):
     def __init__(self):
         super().__init__()
@@ -67,13 +66,17 @@ class p_net(nn.Module):
 
         self.emb = nn.Parameter(torch.zeros(1,81,128))
         self.attn = nn.MultiheadAttention(128,4,batch_first=True)
+ 
+        #self.attn_mask = self.attn_mask.unsqueeze(0).expand(hypers.num_envs, -1, -1, -1).flatten(0,1)
+        #self.register_buffer("attn_mask",attn_mask)
+
         self.norm = nn.LayerNorm(128)
         self.l1 = nn.LazyLinear(128)
         self.l2 = nn.LazyLinear(128)
  
         self.pos = nn.LazyLinear(1)
         self.num = nn.LazyLinear(10)
-        self.v_aux = nn.LazyLinear(1) 
+        self.v_aux = nn.LazyLinear(1)  
     
     def forward(self,s):
         x = self.c1(s)
@@ -81,8 +84,12 @@ class p_net(nn.Module):
         x = F.silu(self.c3(x))
         x = x.flatten(2).transpose(-1,1) # -> torch.Size([1,81,128])
 
-        x = x + self.emb 
-        x,_= self.attn(x,x,x,average_attn_weights=True) 
+        x = x + self.emb
+        self.attn_mask = torch.stack(
+                [self.row_mask(),self.col_mask(),self.region_mask(),self.global_mask()],dim=0
+        ) # -> torch.Size([4, 81, 81]), 4 heads
+        self.attn_mask = self.attn_mask.unsqueeze(0).expand(x.size(0), -1, -1, -1).flatten(0,1)
+        x,_= self.attn(x,x,x,attn_mask = self.attn_mask,average_attn_weights=True)
         x = self.norm(x)
         x = F.silu(self.l1(x))
         x = F.silu(self.l2(x))
@@ -103,7 +110,7 @@ class p_net(nn.Module):
         logi_num = Categorical(logits=pre_o)
         sample_num = dist_num.sample()
 
-        v_aux = self.v_aux(x.mean(1))                        
+        v_aux = self.v_aux(x.mean(1))    
         return (dist_pos,sample_pos,logi_pos),(dist_num,sample_num,logi_num),v_aux.squeeze()
 
     def pos_mask(self,s,x): # mask untouchable cells
@@ -117,6 +124,48 @@ class p_net(nn.Module):
         mask[:,0] = True
         value = -float("inf")
         return torch.masked_fill(x,mask,value)
+
+    def row_mask(self):
+        mask = torch.zeros(81,81, dtype=torch.bool)
+        for i in range(81):
+            ri = i // 9
+            for j in range(81):
+                rj = j // 9
+                if ri == rj:
+                    mask[i, j] = True
+        return mask.float()
+
+    def col_mask(self):
+        mask = torch.zeros(81,81, dtype=torch.bool)
+        for i in range(81):
+            ri = i % 9
+            for j in range(81):
+                rj = j % 9
+                if ri == rj:
+                    mask[i, j] = True
+        return mask.float()
+
+    def region_mask(self):
+        mask = torch.zeros(81, 81, dtype=torch.bool)
+        box_size = 3
+        board_size = 9
+
+        for i in range(81):
+            r_i = i // board_size
+            c_i = i % board_size
+            box_i = (r_i // box_size) * box_size + (c_i // box_size)
+
+            for j in range(81):
+                r_j = j // board_size
+                c_j = j % board_size
+                box_j = (r_j // box_size) * box_size + (c_j // box_size)
+
+                if box_i == box_j:
+                    mask[i, j] = True
+        return mask.float()
+
+    def global_mask(self):
+        return torch.ones(81, 81, dtype=torch.float)
 
 class v_net(nn.Module):
     def __init__(self):
@@ -203,7 +252,7 @@ class memory: # Replay buffer class
          
         self._observation = torch.as_tensor(state,device=hypers.device)
    
-    @torch.compile()
+    #@torch.compile()
     @torch.no_grad()
     def compute_advantage(self): 
         next_value = self.v_net(process_obs(self._observation)).unsqueeze(0) 
@@ -254,8 +303,8 @@ class main:
         self.p_net(process_obs(torch.randint(0,9,(self.env.reset()[0].shape),device=hypers.device)))
         self.v_net(process_obs(torch.randint(0,9,(self.env.reset()[0].shape),device=hypers.device)))
     
-        self.p_net.apply(w_init) ; self.p_net.compile() 
-        self.v_net.apply(w_init) ; self.v_net.compile()
+        #self.p_net.apply(w_init) ; self.p_net.compile() 
+        #self.v_net.apply(w_init) ; self.v_net.compile()
 
     def __init__(self):
         self.env = env() 
@@ -273,9 +322,9 @@ class main:
         torch.save(data,f"./model-{n}")
 
     def load(self,path):
-        self.p_net.load_state_dict(torch.load(path),strict=True)
-        self.v_net.load_state_dict(torch.load(),strict=True)
-        self.optim.load_state_dict(torch.load())
+        self.p_net.load_state_dict(torch.load(path)["policy state"],strict=True)
+        self.v_net.load_state_dict(torch.load(path)["value state"],strict=True)
+        self.optim.load_state_dict(torch.load(path)["value optim"]) 
 
     def run(self,start=False):
         if start:
