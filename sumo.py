@@ -85,10 +85,8 @@ class p_net(nn.Module):
         x = x.flatten(2).transpose(-1,1) # -> torch.Size([1,81,128])
 
         x = x + self.emb
-        self.attn_mask = torch.stack(
-                [self.row_mask(),self.col_mask(),self.region_mask(),self.global_mask()],dim=0
-        ) # -> torch.Size([4, 81, 81]), 4 heads
-        self.attn_mask = self.attn_mask.unsqueeze(0).expand(x.size(0), -1, -1, -1).flatten(0,1)
+        attn_mask = self.attn_masks()
+        attn_mask = attn_mask.unsqueeze(0).expand(x.size(0), -1, -1, -1).flatten(0,1)
         x,_= self.attn(x,x,x,attn_mask = self.attn_mask,average_attn_weights=True)
         x = self.norm(x)
         x = F.silu(self.l1(x))
@@ -125,47 +123,20 @@ class p_net(nn.Module):
         value = -float("inf")
         return torch.masked_fill(x,mask,value)
 
-    def row_mask(self):
-        mask = torch.zeros(81,81, dtype=torch.bool)
-        for i in range(81):
-            ri = i // 9
-            for j in range(81):
-                rj = j // 9
-                if ri == rj:
-                    mask[i, j] = True
-        return mask.float()
+    def attn_masks(self):
+        N = 9*9  # 81 cells
+        indices = torch.arange(N)  # [0..80]
 
-    def col_mask(self):
-        mask = torch.zeros(81,81, dtype=torch.bool)
-        for i in range(81):
-            ri = i % 9
-            for j in range(81):
-                rj = j % 9
-                if ri == rj:
-                    mask[i, j] = True
-        return mask.float()
+        rows = indices // 9                     # shape [81]
+        cols = indices % 9                      # shape [81]
+        boxes = (rows // 3) * 3 + (cols // 3)   # shape [81]
 
-    def region_mask(self):
-        mask = torch.zeros(81, 81, dtype=torch.bool)
-        box_size = 3
-        board_size = 9
+        row_mask = (rows.unsqueeze(0) == rows.unsqueeze(1)).float()
+        col_mask = (cols.unsqueeze(0) == cols.unsqueeze(1)).float()
+        box_mask = (boxes.unsqueeze(0) == boxes.unsqueeze(1)).float()
+        global_mask = torch.ones(N, N)
+        return torch.stack([row_mask, col_mask, box_mask, global_mask],dim=0).to(hypers.device)
 
-        for i in range(81):
-            r_i = i // board_size
-            c_i = i % board_size
-            box_i = (r_i // box_size) * box_size + (c_i // box_size)
-
-            for j in range(81):
-                r_j = j // board_size
-                c_j = j % board_size
-                box_j = (r_j // box_size) * box_size + (c_j // box_size)
-
-                if box_i == box_j:
-                    mask[i, j] = True
-        return mask.float()
-
-    def global_mask(self):
-        return torch.ones(81, 81, dtype=torch.float)
 
 class v_net(nn.Module):
     def __init__(self):
