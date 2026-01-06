@@ -22,12 +22,14 @@ from tqdm import tqdm
 @dataclass(frozen=False)
 class Hypers:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    num_envs = 2
+    num_envs = 3
     max_steps = 10
     batch_size = 4
     mini_batch = 2
     optim_steps = 2
     lr = 1e-4
+    gamma = .99
+    lambda_ = .99
 
 hypers = Hypers()
 
@@ -92,14 +94,14 @@ class replay_buffer:
         self.states = torch.empty(
                 (hypers.batch_size,*self.env.reset()[0].shape),device=hypers.device,dtype=torch.float32
         )
-        self.actions = torch.empty((hypers.batch_size,),device=hypers.device,dtype=torch.float32)
-        self.rewards = torch.empty((hypers.batch_size,),device=hypers.device,dtype=torch.float32)
-        self.dones = torch.empty((hypers.batch_size,),device=hypers.device,dtype=torch.float32)
-        self.advantages = torch.empty((hypers.batch_size,),device=hypers.device,dtype=torch.float32)
-        self.probs = torch.empty((hypers.batch_size,),device=hypers.device,dtype=torch.float32)
-        self.log_probs = torch.empty((hypers.batch_size,),device=hypers.device,dtype=torch.float32)
-        self.values = torch.empty((hypers.batch_size,),device=hypers.device,dtype=torch.float32)
-        self.vaux = torch.empty((hypers.batch_size,),device=hypers.device,dtype=torch.float32)
+        self.actions = torch.empty((hypers.batch_size,hypers.num_envs,12),device=hypers.device,dtype=torch.float32)
+        self.rewards = torch.empty((hypers.batch_size,hypers.num_envs),device=hypers.device,dtype=torch.float32)
+        self.dones = torch.empty((hypers.batch_size,hypers.num_envs),device=hypers.device,dtype=torch.float32)
+        self.advantages = torch.empty((hypers.batch_size,hypers.num_envs,1),device=hypers.device,dtype=torch.float32)
+        self.probs = torch.empty((hypers.batch_size,hypers.num_envs,12),device=hypers.device,dtype=torch.float32)
+        self.log_probs = torch.empty((hypers.batch_size,hypers.num_envs,12),device=hypers.device,dtype=torch.float32)
+        self.values = torch.empty((hypers.batch_size,hypers.num_envs,1),device=hypers.device,dtype=torch.float32)
+        self.vaux = torch.empty((hypers.batch_size,hypers.num_envs,1),device=hypers.device,dtype=torch.float32)
 
         self.obs = process_obs(env.reset()[0])
         self.policy_net = policy_net
@@ -113,33 +115,34 @@ class replay_buffer:
         p_logits,vaux = self.policy_net(self.obs)
         value = self.value_net(self.obs)
         dist = Bernoulli(logits=p_logits)
-        sample = dist.sample() 
+        sample = dist.sample()
+        dist_prob = dist.log_prob(sample)
 
         nx_states,reward,dones,_,_ = self.env.step(sample.cpu().numpy())
-        self.ep_reward_buffer += torch.as_tensor(reward)
-        if np.all(reward) : self.ep_reward.append(self.ep_reward_buffer.tolist())
-            
-        self.states[num_it].copy_(self.obs)
-        self.actions[num_it].copy_(sample)
-        self.rewards[num_it].copy_(reward)
-        self.dones[num_it].copy_(dones)
-        self.probs[num_it].copy_(p_dist)
+        #self.ep_reward_buffer += torch.as_tensor(reward)
+        #if np.all(reward) : self.ep_reward.append(self.ep_reward_buffer.tolist())::
+    
+        self.states[num_it].copy_(self.obs.squeeze())
+        self.actions[num_it].copy_(torch.as_tensor(sample,device=hypers.device))
+        self.rewards[num_it].copy_(torch.as_tensor(reward,device=hypers.device))
+        self.dones[num_it].copy_(torch.as_tensor(dones,device=hypers.device))
+        self.probs[num_it].copy_(dist.probs)
         self.log_probs[num_it].copy_(dist.log_prob(sample))
         self.values[num_it].copy_(value)
         self.vaux[num_it].copy_(vaux)
 
         self.obs = process_obs(nx_states)
         
-    @torch.compile()
+    #@torch.compile()
     @torch.no_grad()
     def compute_advantage(self): 
-        next_value = self.value_net(process_obs(self._observation)).unsqueeze(0) 
+        next_value = self.value_net(self.obs).unsqueeze(0) 
         _values = torch.cat([self.values,next_value]).squeeze(-1)
         gae = torch.zeros_like(self.rewards[0], device=hypers.device)
-        td = self.rewards.clone().add_(self.gamma * _values[1:] * (1 - self.dones)).sub_(_values[:-1])
+        td = self.rewards.clone().add_(hypers.gamma * _values[1:] * (1 - self.dones)).sub_(_values[:-1])
         for n in reversed(range(len(self.rewards))): 
-            gae.mul_(self._lambda_ * self.gamma * (1-self.dones[n])).add_(td[n])
-            self.advantages[n].copy_(gae) 
+            gae.mul_(hypers.lambda_ * hypers.gamma * (1-self.dones[n])).add_(td[n])
+            self.advantages[n].copy_(gae.unsqueeze(-1)) 
 
     def sample(self,minibatch):
         idx = torch.randperm(hypers.batch_size)[:minibatch]
@@ -163,8 +166,8 @@ class main:
         self.policy_net(process_obs(torch.rand(*(self.env.reset()[0].shape),device=hypers.device)))
         self.value_net(process_obs(torch.rand(*(self.env.reset()[0].shape),device=hypers.device)))
         
-        # self.policy_net.apply(init) ; self.policy_net.compile()
-        # self.value_net.apply(init) ; self.value_net.compile()
+        #self.policy_net.apply(init) ; self.policy_net.compile()
+        #self.value_net.apply(init) ; self.value_net.compile()
 
     def __init__(self):
         self.env = vec()
@@ -199,7 +202,4 @@ class main:
 
 
                 
-            
-
-
 
