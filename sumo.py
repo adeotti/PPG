@@ -23,19 +23,19 @@ torch.set_printoptions(precision=4, sci_mode=False)
 @dataclass(frozen=False)
 class Hypers:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    horizon = 10 #100
-    num_envs = 2#10
-    max_steps = 50#10_000
-    batchsize = 20#512
-    minibatch = 5#32
-    e_aux = 1#16
+    horizon = 100
+    num_envs = 10
+    max_steps = 10_000
+    batchsize = 512
+    minibatch = 32
+    e_aux = 16
     lr = 5e-4
     gamma = .99
     lambda_ = .99
     epsilon = .2
     beta = 5e-1     # entropy coeff
     beta_clone = 1  # kl coeff in the aux phase
-    optim_steps = 1#5 # defualt 32 as seen in the original paper
+    optim_steps = 5 # defualt 32 as seen in the original paper
     
 hypers = Hypers()
 
@@ -64,11 +64,10 @@ class p_net(nn.Module):
         self.c2 = nn.LazyConv2d(128,3,1,padding=1)
         self.c3 = nn.LazyConv2d(128,3,1,padding=1)
 
-        self.emb = nn.Parameter(torch.zeros(1,81,128))
+        self.emb = nn.Parameter(torch.randn(1,81,128) * 0.02)
         self.attn = nn.MultiheadAttention(128,4,batch_first=True)
- 
-        #self.attn_mask = self.attn_mask.unsqueeze(0).expand(hypers.num_envs, -1, -1, -1).flatten(0,1)
-        #self.register_buffer("attn_mask",attn_mask)
+        
+        self.register_buffer("attn_mask",self.attn_masks())
 
         self.norm = nn.LayerNorm(128)
         self.l1 = nn.LazyLinear(128)
@@ -82,12 +81,11 @@ class p_net(nn.Module):
         x = self.c1(s)
         x = F.silu(self.c2(x))  
         x = F.silu(self.c3(x))
-        x = x.flatten(2).transpose(-1,1) # -> torch.Size([1,81,128])
+        x = x.flatten(2).transpose(-1,1) # -> torch.Size([batch,81,128])
 
         x = x + self.emb
-        attn_mask = self.attn_masks()
-        attn_mask = attn_mask.unsqueeze(0).expand(x.size(0), -1, -1, -1).flatten(0,1)
-        x,_= self.attn(x,x,x,attn_mask = self.attn_mask,average_attn_weights=True)
+        attn_mask = self.attn_mask.unsqueeze(0).expand(x.size(0), -1, -1, -1).flatten(0,1)
+        x,_= self.attn(x,x,x,attn_mask=attn_mask,average_attn_weights=True)
         x = self.norm(x)
         x = F.silu(self.l1(x))
         x = F.silu(self.l2(x))
@@ -223,7 +221,7 @@ class memory: # Replay buffer class
          
         self._observation = torch.as_tensor(state,device=hypers.device)
    
-    #@torch.compile()
+    @torch.compile()
     @torch.no_grad()
     def compute_advantage(self): 
         next_value = self.v_net(process_obs(self._observation)).unsqueeze(0) 
@@ -274,8 +272,8 @@ class main:
         self.p_net(process_obs(torch.randint(0,9,(self.env.reset()[0].shape),device=hypers.device)))
         self.v_net(process_obs(torch.randint(0,9,(self.env.reset()[0].shape),device=hypers.device)))
     
-        #self.p_net.apply(w_init) ; self.p_net.compile() 
-        #self.v_net.apply(w_init) ; self.v_net.compile()
+        self.p_net.apply(w_init) ; self.p_net.compile() 
+        self.v_net.apply(w_init) ; self.v_net.compile()
 
     def __init__(self):
         self.env = env() 
