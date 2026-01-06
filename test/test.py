@@ -7,6 +7,7 @@ from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 from datetime import datetime
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 HORIZON = 100
 
@@ -26,14 +27,14 @@ class p_net(nn.Module):
         self.c1 = nn.LazyConv2d(64,1,1)
         self.c2 = nn.LazyConv2d(128,3,1,padding=1)
         self.c3 = nn.LazyConv2d(128,3,1,padding=1)
-        self.emb = nn.Parameter(torch.zeros(1,81,128))
+        self.emb = nn.Parameter(torch.randn(1,81,128) * 0.02)
         self.attn = nn.MultiheadAttention(128,4,batch_first=True)
         self.norm = nn.LayerNorm(128)
         self.l1 = nn.LazyLinear(128)
         self.l2 = nn.LazyLinear(128)
         self.pos = nn.LazyLinear(1)
         self.num = nn.LazyLinear(10)
-        self.v_aux = nn.LazyLinear(1) 
+        self.v_aux = nn.LazyLinear(1)
     
     def forward(self,s):
         x = self.c1(s)
@@ -68,6 +69,20 @@ class p_net(nn.Module):
         mask[:,0] = True
         value = -float("inf")
         return torch.masked_fill(x,mask,value)
+    
+    def attn_masks(self):
+        N = 9*9  # 81 cells
+        indices = torch.arange(N)  # [0..80]
+
+        rows = indices // 9      # shape [81]
+        cols = indices % 9       # shape [81]
+        boxes = (rows // 3) * 3 + (cols // 3)  # shape [81
+
+        row_mask = (rows.unsqueeze(0) == rows.unsqueeze(1)).float()
+        col_mask = (cols.unsqueeze(0) == cols.unsqueeze(1)).float()
+        box_mask = (boxes.unsqueeze(0) == boxes.unsqueeze(1)).float()
+        global_mask = torch.ones(N, N)
+        return torch.stack([row_mask, col_mask, box_mask, global_mask],dim=0)
 
 
 def test_trained(rollout_num:int=None,stochastic:bool=True):
@@ -112,7 +127,32 @@ def test_random(rollout_num:int=None):
             r = 0
             env.reset()
 
+def plot_attn_mask():
+    masks = p_net(True).attn_masks()
+    fig, axes = plt.subplots(1, 4, figsize=(20, 5))
+    titles = ['Head 0: Row', 'Head 1: Column', 'Head 2: Region', 'Head 3: Global']
+
+    for i, (ax, title) in enumerate(zip(axes, titles)):
+        m = masks[i].float().cpu().numpy()
+        
+        im = ax.imshow(m, cmap='binary', interpolation='nearest')
+        ax.set_title(title, fontsize=14)
+        ax.set_xlabel('Key Position (0-80)', fontsize=10)
+        ax.set_ylabel('Query Position (0-80)', fontsize=10)
+        
+        # Add grid lines every 9 cells to show board structure
+        for k in range(0, 82, 9):
+            ax.axhline(k - 0.5, color='grey', linewidth=1, alpha=0.3)
+            ax.axvline(k - 0.5, color='grey', linewidth=1, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig('attention_masks.png', dpi=150, bbox_inches='tight')
+    plt.show()
+    
+
+
 if __name__ == "__main__":
-    episodes = HORIZON*100
-    test_trained(episodes,True)
-    test_random(episodes)
+    #episodes = HORIZON*100
+    #test_trained(episodes,True)
+    #test_random(episodes)
+    #plot_attn_mask()
