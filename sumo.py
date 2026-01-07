@@ -25,7 +25,7 @@ class Hypers:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     horizon = 100
     num_envs = 10
-    max_steps = 10_000
+    max_steps = 20_000
     batchsize = 512
     minibatch = 32
     e_aux = 16
@@ -109,8 +109,22 @@ class p_net(nn.Module):
         v_aux = self.v_aux(x.mean(1))    
         return (dist_pos,sample_pos,logi_pos),(dist_num,sample_num,logi_num),v_aux.squeeze()
 
+    def attn_masks(self):
+        N = 9*9 # 81 cells
+        indices = torch.arange(N)               # [0..80]
+
+        rows = indices // 9                     # -> shape [81]
+        cols = indices % 9                      # -> shape [81]
+        boxes = (rows // 3) * 3 + (cols // 3)   # -> shape [81]
+
+        row_mask = (rows.unsqueeze(0) == rows.unsqueeze(1)).float()
+        col_mask = (cols.unsqueeze(0) == cols.unsqueeze(1)).float()
+        box_mask = (boxes.unsqueeze(0) == boxes.unsqueeze(1)).float()
+        global_mask = torch.ones(N, N)
+        return torch.stack([row_mask, col_mask, box_mask, global_mask],dim=0).to(hypers.device)
+
     def pos_mask(self,s,x): # mask untouchable cells
-        s = s.argmax(1)
+        s = s.argmax(1) # revert that one hot envoding ! 
         mask = (s!=0).flatten(1)
         value = -float("inf")
         return torch.masked_fill(x,mask,value)
@@ -121,19 +135,7 @@ class p_net(nn.Module):
         value = -float("inf")
         return torch.masked_fill(x,mask,value)
 
-    def attn_masks(self):
-        N = 9*9  # 81 cells
-        indices = torch.arange(N)  # [0..80]
 
-        rows = indices // 9                     # shape [81]
-        cols = indices % 9                      # shape [81]
-        boxes = (rows // 3) * 3 + (cols // 3)   # shape [81]
-
-        row_mask = (rows.unsqueeze(0) == rows.unsqueeze(1)).float()
-        col_mask = (cols.unsqueeze(0) == cols.unsqueeze(1)).float()
-        box_mask = (boxes.unsqueeze(0) == boxes.unsqueeze(1)).float()
-        global_mask = torch.ones(N, N)
-        return torch.stack([row_mask, col_mask, box_mask, global_mask],dim=0).to(hypers.device)
 
 
 class v_net(nn.Module):
@@ -204,9 +206,8 @@ class memory: # Replay buffer class
         # self.env.action_space.sample() >>> (array([0, 5]), array([2, 6]), array([3, 4])) 
       
         state,reward,done,_,_ = self.env.step(action)
-        reward = np.round(reward,2)
                     
-        self.episode_reward += reward*0.1 
+        self.episode_reward += reward
         done_envs = np.where(done==True)[0]
         if num_it+1 == hypers.horizon:
             self.rewards_deque.append(self.episode_reward.mean())
@@ -295,9 +296,27 @@ class main:
         self.v_net.load_state_dict(torch.load(path)["value state"],strict=True)
         self.optim.load_state_dict(torch.load(path)["value optim"]) 
 
+    def horizon_decay(self,n):
+        old_horizon = hypers.horizon
+
+        if n<2000: hypers.horizon = 800
+        elif n<4000: hypers.horizon = 400
+        elif n<6000: hypers.horizon = 200
+        else: hypers.horizon = 150
+
+        if hypers.horizon != old_horizon:
+            self.env.close()
+            self.env = env()
+            self.memory = memory(self.env,self.p_net,self.v_net)
+
+        self.writter.add_scalar("main/horizon",hypers.horizon,n)
+
     def run(self,start=False):
         if start:
             for n in tqdm(range(hypers.max_steps),total=hypers.max_steps):
+                
+                self.horizon_decay(n)
+
                 for m in range(hypers.batchsize):
                     self.memory.step(m) 
                 
