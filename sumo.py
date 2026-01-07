@@ -23,19 +23,19 @@ torch.set_printoptions(precision=4, sci_mode=False)
 @dataclass(frozen=False)
 class Hypers:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    horizon = 50#100
-    num_envs = 2#10
-    max_steps = 40#20_000
-    batchsize = 20#512
-    minibatch = 4#32
-    e_aux = 1#16
+    horizon = 100
+    num_envs = 10
+    max_steps = 20_000
+    batchsize = 512
+    minibatch = 32
+    e_aux = 16
     lr = 5e-4
     gamma = .99
     lambda_ = .99
     epsilon = .2
-    beta = 1e-2     # entropy coeff
-    beta_clone = 1  # kl coeff in the aux phase
-    optim_steps = 1#10 # defualt 32 as seen in the original paper
+    beta = 1e-2      # entropy coeff
+    beta_clone = 1   # kl coeff in the aux phase
+    optim_steps = 10 # defualt 32 as seen in the original paper
     
 hypers = Hypers()
 
@@ -187,7 +187,6 @@ class memory: # Replay buffer class
           
     @torch.no_grad()
     def step(self,num_it):
-        #print(self._observation)
         pos_data,num_data,v_policy = self.p_net(process_obs(self._observation))
         self.pos_probs[num_it].copy_(pos_data[0].probs)
         self.num_probs[num_it].copy_(num_data[0].probs)
@@ -219,7 +218,7 @@ class memory: # Replay buffer class
          
         self._observation = torch.as_tensor(state,device=hypers.device)
    
-    #@torch.compile()
+    @torch.compile()
     @torch.no_grad()
     def compute_advantage(self): 
         next_value = self.v_net(process_obs(self._observation)).unsqueeze(0) 
