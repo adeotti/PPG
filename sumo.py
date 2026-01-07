@@ -33,7 +33,7 @@ class Hypers:
     gamma = .99
     lambda_ = .99
     epsilon = .2
-    beta = 5e-1     # entropy coeff
+    beta = 1e-2     # entropy coeff
     beta_clone = 1  # kl coeff in the aux phase
     optim_steps = 5 # defualt 32 as seen in the original paper
     
@@ -134,8 +134,6 @@ class p_net(nn.Module):
         mask[:,0] = True
         value = -float("inf")
         return torch.masked_fill(x,mask,value)
-
-
 
 
 class v_net(nn.Module):
@@ -308,8 +306,7 @@ class main:
             self.env.close()
             self.env = env()
             self.memory = memory(self.env,self.p_net,self.v_net)
-
-        self.writter.add_scalar("main/horizon",hypers.horizon,n)
+            self.writter.add_scalar("main/horizon",hypers.horizon,n)
 
     def run(self,start=False):
         if start:
