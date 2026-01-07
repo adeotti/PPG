@@ -23,19 +23,19 @@ torch.set_printoptions(precision=4, sci_mode=False)
 @dataclass(frozen=False)
 class Hypers:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    horizon = 100
-    num_envs = 10
-    max_steps = 20_000
-    batchsize = 512
-    minibatch = 32
-    e_aux = 16
+    horizon = 50#100
+    num_envs = 2#10
+    max_steps = 40#20_000
+    batchsize = 20#512
+    minibatch = 4#32
+    e_aux = 1#16
     lr = 5e-4
     gamma = .99
     lambda_ = .99
     epsilon = .2
     beta = 1e-2     # entropy coeff
     beta_clone = 1  # kl coeff in the aux phase
-    optim_steps = 5 # defualt 32 as seen in the original paper
+    optim_steps = 1#10 # defualt 32 as seen in the original paper
     
 hypers = Hypers()
 
@@ -126,13 +126,13 @@ class p_net(nn.Module):
     def pos_mask(self,s,x): # mask untouchable cells
         s = s.argmax(1) # revert that one hot envoding ! 
         mask = (s!=0).flatten(1)
-        value = -float("inf")
+        value = -1e9
         return torch.masked_fill(x,mask,value)
 
     def action_mask(self,x): # min(cell value) = 1 
         mask = torch.zeros_like(x,dtype=torch.bool)   
         mask[:,0] = True
-        value = -float("inf")
+        value = -1e9
         return torch.masked_fill(x,mask,value)
 
 
@@ -187,6 +187,7 @@ class memory: # Replay buffer class
           
     @torch.no_grad()
     def step(self,num_it):
+        #print(self._observation)
         pos_data,num_data,v_policy = self.p_net(process_obs(self._observation))
         self.pos_probs[num_it].copy_(pos_data[0].probs)
         self.num_probs[num_it].copy_(num_data[0].probs)
@@ -204,9 +205,7 @@ class memory: # Replay buffer class
         # self.env.action_space.sample() >>> (array([0, 5]), array([2, 6]), array([3, 4])) 
       
         state,reward,done,_,_ = self.env.step(action)
-                    
         self.episode_reward += reward
-        done_envs = np.where(done==True)[0]
         if num_it+1 == hypers.horizon:
             self.rewards_deque.append(self.episode_reward.mean())
             self.episode_reward = torch.zeros(self.env.num_envs)
@@ -220,7 +219,7 @@ class memory: # Replay buffer class
          
         self._observation = torch.as_tensor(state,device=hypers.device)
    
-    @torch.compile()
+    #@torch.compile()
     @torch.no_grad()
     def compute_advantage(self): 
         next_value = self.v_net(process_obs(self._observation)).unsqueeze(0) 
@@ -271,8 +270,8 @@ class main:
         self.p_net(process_obs(torch.randint(0,9,(self.env.reset()[0].shape),device=hypers.device)))
         self.v_net(process_obs(torch.randint(0,9,(self.env.reset()[0].shape),device=hypers.device)))
     
-        self.p_net.apply(w_init) ; self.p_net.compile() 
-        self.v_net.apply(w_init) ; self.v_net.compile()
+        self.p_net.apply(w_init) #; self.p_net.compile() 
+        self.v_net.apply(w_init) #; self.v_net.compile()
 
     def __init__(self):
         self.env = env() 
@@ -353,7 +352,7 @@ class main:
                     frozen_num_probs.append(num_data[-1].logits)
                     v_target_list.append(v_target)
                     
-                    if i%50 == 0:
+                    if i!=0 and i%50 == 0:
                         self.writter.add_scalar("main/Loss policy",loss_policy)
                         self.writter.add_scalar("main/Loss value",loss_value)
                         self.writter.add_scalar("main/total loss",loss)
