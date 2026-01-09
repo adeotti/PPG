@@ -9,7 +9,7 @@ from datetime import datetime
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
-HORIZON = 100
+HORIZON = int(1e6)
 
 def envi():
     x = gym.make("sudoku-v0",render_mode="human",horizon=HORIZON)
@@ -35,6 +35,7 @@ class p_net(nn.Module):
         self.pos = nn.LazyLinear(1)
         self.num = nn.LazyLinear(10)
         self.v_aux = nn.LazyLinear(1)
+        self.register_buffer("attn_mask",self.attn_masks())
     
     def forward(self,s):
         x = self.c1(s)
@@ -42,7 +43,8 @@ class p_net(nn.Module):
         x = F.silu(self.c3(x))
         x = x.flatten(2).transpose(-1,1) 
         x = x + self.emb
-        x,asc = self.attn(x,x,x) 
+        #x,asc = self.attn(x,x,x)
+        x,asc= self.attn(x,x,x,attn_mask=self.attn_mask,average_attn_weights=True)
         x = self.norm(x)
         x = F.silu(self.l1(x))
         x = F.silu(self.l2(x))
@@ -61,7 +63,7 @@ class p_net(nn.Module):
     def pos_mask(self,s,x): 
         s = s.argmax(1)
         mask = (s!=0).flatten(1)
-        value = -float("inf")
+        value = -1e9
         return torch.masked_fill(x,mask,value)
 
     def action_mask(self,x): 
@@ -91,24 +93,30 @@ def test_trained(rollout_num:int=None,stochastic:bool=True):
     )
     policy = p_net(stochastic=stochastic)
     policy(process_obs(torch.randint(0,9,(1,9,9))))
-    t_policy = torch.load("./model-2000",map_location="cpu")["policy state"]
+    t_policy = torch.load("./model-10000",map_location="cpu")["policy state"]
     policy.load_state_dict(t_policy,strict=False)
 
     env = envi()
     obs = env.reset()[0]
     r = 0
-
+    steps=0
+    
     for n in tqdm(range(rollout_num),total=rollout_num):
         pos,num,attn = policy(process_obs(torch.tensor(obs,dtype=torch.int64).unsqueeze(0)))
         xpos = pos // 9 ; ypos = pos % 9
         action = np.stack((xpos,ypos,num),axis=-1).reshape(3)
         obs,reward,done,trunc,_ = env.step(action)
-        #env.render()
-        r+=reward
+        steps+=1 ; r+=reward
+        env.render()
+    
         if trunc:
             writter.add_scalar("reward_per_ep",r,global_step=n/HORIZON)
             r = 0
             obs = env.reset()[0]
+        elif done:
+            t1 = time.perf_counter()
+            print("steps : ",steps)
+            sys.exit()
 
 def test_random(rollout_num:int=None):
     writter = SummaryWriter(
@@ -117,42 +125,48 @@ def test_random(rollout_num:int=None):
     env = envi()
     obs = env.reset()[0]
     r = 0
+    steps = 0
 
-    for n in tqdm(range(rollout_num),total=rollout_num): 
+    for n in tqdm(range(rollout_num),total=rollout_num):
         obs,reward,done,trunc,_ = env.step(env.action_space.sample())
+        steps+=1 ; r+=reward
         #env.render()
-        r+=reward
+    
         if trunc:
             writter.add_scalar("reward_per_ep",r,global_step=n/HORIZON)
             r = 0
+            steps = 0
             env.reset()
+        if done:
+            t1 = time.perf_counter()
+            print(f"\nSteps : {steps} | Rewards : {r:.2f} \n{obs}" )
+            sys.exit()
 
 def plot_attn_mask():
     masks = p_net(True).attn_masks()
-    fig, axes = plt.subplots(1, 4, figsize=(20, 5))
-    titles = ['Head 0: Row', 'Head 1: Column', 'Head 2: Region', 'Head 3: Global']
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    axes = axes.flatten()
+    titles = ["Head 0: Row","Head 1: Column","Head 2: Region","Head 3: Global"]
 
     for i, (ax, title) in enumerate(zip(axes, titles)):
         m = masks[i].float().cpu().numpy()
         
-        im = ax.imshow(m, cmap='binary', interpolation='nearest')
+        im = ax.imshow(m, cmap="binary", interpolation="nearest")
         ax.set_title(title, fontsize=14)
-        ax.set_xlabel('Key Position (0-80)', fontsize=10)
-        ax.set_ylabel('Query Position (0-80)', fontsize=10)
+        ax.set_xlabel("Key Position (0-80)", fontsize=10)
+        ax.set_ylabel("Query Position (0-80)", fontsize=10)
         
-        # Add grid lines every 9 cells to show board structure
         for k in range(0, 82, 9):
-            ax.axhline(k - 0.5, color='grey', linewidth=1, alpha=0.3)
-            ax.axvline(k - 0.5, color='grey', linewidth=1, alpha=0.3)
+            ax.axhline(k - 0.5, color="grey", linewidth=1, alpha=0.3)
+            ax.axvline(k - 0.5, color="grey", linewidth=1, alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig('attention_masks.png', dpi=150, bbox_inches='tight')
+    plt.savefig("attention_masks.png", dpi=150, bbox_inches="tight")
     plt.show()
     
 
-
 if __name__ == "__main__":
-    #episodes = HORIZON*100
+    episodes = HORIZON*200
     #test_trained(episodes,True)
-    #test_random(episodes)
+    test_random(episodes)
     #plot_attn_mask()
