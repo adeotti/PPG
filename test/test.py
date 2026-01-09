@@ -111,11 +111,10 @@ def test_trained(rollout_num:int=None,stochastic:bool=True):
     
         if trunc:
             writter.add_scalar("reward_per_ep",r,global_step=n/HORIZON)
-            r = 0
+            steps = 0 ; r = 0
             obs = env.reset()[0]
         elif done:
-            t1 = time.perf_counter()
-            print("steps : ",steps)
+            print(f"\nSteps : {steps} | Rewards : {r:.2f} \n{obs}" )
             sys.exit()
 
 def test_random(rollout_num:int=None):
@@ -134,8 +133,7 @@ def test_random(rollout_num:int=None):
     
         if trunc:
             writter.add_scalar("reward_per_ep",r,global_step=n/HORIZON)
-            r = 0
-            steps = 0
+            steps = 0 ; r = 0
             env.reset()
         if done:
             t1 = time.perf_counter()
