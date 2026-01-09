@@ -106,7 +106,7 @@ def test_trained(rollout_num:int=None,stochastic:bool=True):
         action = np.stack((xpos,ypos,num),axis=-1).reshape(3)
         obs,reward,done,trunc,_ = env.step(action)
         steps+=1 ; r+=reward
-        env.render()
+        #env.render()
     
         if trunc:
             writter.add_scalar("reward_per_ep",r,global_step=n/HORIZON)
@@ -164,7 +164,7 @@ def plot_attn_mask():
     
 
 if __name__ == "__main__":
-    episodes = HORIZON*200
-    #test_trained(episodes,True)
+    episodes = HORIZON
+    test_trained(episodes,True)
     #test_random(episodes)
     #plot_attn_mask()
