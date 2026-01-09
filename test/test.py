@@ -9,7 +9,7 @@ from datetime import datetime
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
-HORIZON = int(1e6)
+HORIZON = int(10e3)
 
 def envi():
     x = gym.make("sudoku-v0",render_mode="human",horizon=HORIZON)
@@ -43,7 +43,6 @@ class p_net(nn.Module):
         x = F.silu(self.c3(x))
         x = x.flatten(2).transpose(-1,1) 
         x = x + self.emb
-        #x,asc = self.attn(x,x,x)
         x,asc= self.attn(x,x,x,attn_mask=self.attn_mask,average_attn_weights=True)
         x = self.norm(x)
         x = F.silu(self.l1(x))
@@ -117,6 +116,7 @@ def test_trained(rollout_num:int=None,stochastic:bool=True):
             print(f"\nSteps : {steps} | Rewards : {r:.2f} \n{obs}" )
             sys.exit()
 
+
 def test_random(rollout_num:int=None):
     writter = SummaryWriter(
             f"test/random_policy_{rollout_num}_episodes_{datetime.now().strftime('%Y%m%d_%H%M%S')}_hor_{HORIZON}"
@@ -135,10 +135,10 @@ def test_random(rollout_num:int=None):
             writter.add_scalar("reward_per_ep",r,global_step=n/HORIZON)
             steps = 0 ; r = 0
             env.reset()
-        if done:
-            t1 = time.perf_counter()
+        elif done:
             print(f"\nSteps : {steps} | Rewards : {r:.2f} \n{obs}" )
             sys.exit()
+
 
 def plot_attn_mask():
     masks = p_net(True).attn_masks()
@@ -166,5 +166,5 @@ def plot_attn_mask():
 if __name__ == "__main__":
     episodes = HORIZON*200
     #test_trained(episodes,True)
-    test_random(episodes)
+    #test_random(episodes)
     #plot_attn_mask()
