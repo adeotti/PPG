@@ -23,9 +23,9 @@ torch.set_printoptions(precision=4, sci_mode=False)
 @dataclass(frozen=False)
 class Hypers:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    horizon = 100
+    horizon = 150
     num_envs = 10
-    max_steps = 20_000
+    max_steps = 10_002
     batchsize = 512
     minibatch = 32
     e_aux = 16
@@ -33,9 +33,9 @@ class Hypers:
     gamma = .99
     lambda_ = .99
     epsilon = .2
-    beta = 1e-2      # entropy coeff
+    beta = 1e-1      # entropy coeff
     beta_clone = 1   # kl coeff in the aux phase
-    optim_steps = 10 # defualt 32 as seen in the original paper
+    optim_steps = 5 
     
 hypers = Hypers()
 
@@ -109,9 +109,8 @@ class p_net(nn.Module):
         v_aux = self.v_aux(x.mean(1))    
         return (dist_pos,sample_pos,logi_pos),(dist_num,sample_num,logi_num),v_aux.squeeze()
 
-    def attn_masks(self):
-        N = 9*9 # 81 cells
-        indices = torch.arange(N)               # [0..80]
+    def attn_masks(self,N=81):
+        indices = torch.arange(N)
 
         rows = indices // 9                     # -> shape [81]
         cols = indices % 9                      # -> shape [81]
@@ -121,12 +120,12 @@ class p_net(nn.Module):
         col_mask = (cols.unsqueeze(0) == cols.unsqueeze(1)).float()
         box_mask = (boxes.unsqueeze(0) == boxes.unsqueeze(1)).float()
         global_mask = torch.ones(N, N)
-        return torch.stack([row_mask, col_mask, box_mask, global_mask],dim=0).to(hypers.device)
+        return torch.stack([row_mask,col_mask,box_mask,global_mask],dim=0).to(hypers.device)
 
     def pos_mask(self,s,x): # mask untouchable cells
-        s = s.argmax(1) # revert that one hot envoding ! 
+        s = s.argmax(1)
         mask = (s!=0).flatten(1)
-        value = -1e9
+        value = -1e9 # -inf generates nan when board is full
         return torch.masked_fill(x,mask,value)
 
     def action_mask(self,x): # min(cell value) = 1 
@@ -269,8 +268,8 @@ class main:
         self.p_net(process_obs(torch.randint(0,9,(self.env.reset()[0].shape),device=hypers.device)))
         self.v_net(process_obs(torch.randint(0,9,(self.env.reset()[0].shape),device=hypers.device)))
     
-        self.p_net.apply(w_init) #; self.p_net.compile() 
-        self.v_net.apply(w_init) #; self.v_net.compile()
+        self.p_net.apply(w_init) ; self.p_net.compile() 
+        self.v_net.apply(w_init) ; self.v_net.compile()
 
     def __init__(self):
         self.env = env() 
@@ -292,7 +291,7 @@ class main:
         self.v_net.load_state_dict(torch.load(path)["value state"],strict=True)
         self.optim.load_state_dict(torch.load(path)["value optim"]) 
 
-    def horizon_decay(self,n):
+    def horizon_decay(self,n): # force curriculum learning
         old_horizon = hypers.horizon
 
         if n<2000: hypers.horizon = 800
@@ -398,7 +397,7 @@ class main:
                         self.writter.add_scalar("auxiliary/loss joint",l_joint)
                         self.writter.add_scalar("auxiliary/loss value",l_value)
                    
-                if n%2_000 == 0:
+                if n%1_000 == 0:
                     self.save(n)
 
 if __name__ == "__main__":
