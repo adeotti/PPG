@@ -86,13 +86,17 @@ class p_net(nn.Module):
         return torch.stack([row_mask,col_mask,box_mask,global_mask],dim=0)
 
 
+def backtracking():
+    pass
+
+
 def test_trained(rollout_num:int=None,stochastic:bool=True):
     writter = SummaryWriter(
-            f"results/stochastic_{rollout_num}_episodes_{datetime.now().strftime('%Y%m%d_%H%M%S')}_hor_{HORIZON}"
+            f"test/stochastic_{rollout_num}_epi_{datetime.now().strftime('%Y%m%d_%H%M%S')}_hor_{HORIZON}"
     )
     policy = p_net(stochastic=stochastic)
     policy(process_obs(torch.randint(0,9,(1,9,9))))
-    t_policy = torch.load("./model-4000_old",map_location="cpu")["policy state"]
+    t_policy = torch.load("./models/sumo_v1_10k",map_location="cpu")["policy state"]
     policy.load_state_dict(t_policy,strict=False)
 
     env = envi()
@@ -116,7 +120,7 @@ def test_trained(rollout_num:int=None,stochastic:bool=True):
         
 def test_random(rollout_num:int=None):
     writter = SummaryWriter(
-            f"results/random_policy_{rollout_num}_episodes_{datetime.now().strftime('%Y%m%d_%H%M%S')}_hor_{HORIZON}"
+            f"test/random_policy_{rollout_num}_epi_{datetime.now().strftime('%Y%m%d_%H%M%S')}_hor_{HORIZON}"
     )
     env = envi()
     obs = env.reset()[0]
