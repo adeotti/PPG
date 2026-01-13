@@ -8,11 +8,12 @@ import numpy as np
 from datetime import datetime
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+import time
 
 HORIZON = int(10e3)
 
 def envi():
-    x = gym.make("sudoku-v0",render_mode="human",horizon=HORIZON)
+    x = gym.make("sudoku-v0",render_mode="human",horizon=HORIZON,eval_mode=False,render_delay=0.0)
     return x 
 
 def process_obs(x): 
@@ -71,34 +72,32 @@ class p_net(nn.Module):
         value = -float("inf")
         return torch.masked_fill(x,mask,value)
     
-    def attn_masks(self):
-        N = 9*9  # 81 cells
-        indices = torch.arange(N)  # [0..80]
+    def attn_masks(self,N=81):
+        indices = torch.arange(N)  
 
         rows = indices // 9      # shape [81]
         cols = indices % 9       # shape [81]
-        boxes = (rows // 3) * 3 + (cols // 3)  # shape [81
+        boxes = (rows // 3) * 3 + (cols // 3)  # shape [81]
 
         row_mask = (rows.unsqueeze(0) == rows.unsqueeze(1)).float()
         col_mask = (cols.unsqueeze(0) == cols.unsqueeze(1)).float()
         box_mask = (boxes.unsqueeze(0) == boxes.unsqueeze(1)).float()
         global_mask = torch.ones(N, N)
-        return torch.stack([row_mask, col_mask, box_mask, global_mask],dim=0)
+        return torch.stack([row_mask,col_mask,box_mask,global_mask],dim=0)
 
 
 def test_trained(rollout_num:int=None,stochastic:bool=True):
     writter = SummaryWriter(
-            f"test/stochastic_policy_{rollout_num}_episodes_{datetime.now().strftime('%Y%m%d_%H%M%S')}_hor_{HORIZON}"
+            f"results/stochastic_{rollout_num}_episodes_{datetime.now().strftime('%Y%m%d_%H%M%S')}_hor_{HORIZON}"
     )
     policy = p_net(stochastic=stochastic)
     policy(process_obs(torch.randint(0,9,(1,9,9))))
-    t_policy = torch.load("./model-10000",map_location="cpu")["policy state"]
+    t_policy = torch.load("./model-4000_old",map_location="cpu")["policy state"]
     policy.load_state_dict(t_policy,strict=False)
 
     env = envi()
     obs = env.reset()[0]
-    r = 0
-    steps=0
+    steps = r = 0
     
     for n in tqdm(range(rollout_num),total=rollout_num):
         pos,num,attn = policy(process_obs(torch.tensor(obs,dtype=torch.int64).unsqueeze(0)))
@@ -106,38 +105,33 @@ def test_trained(rollout_num:int=None,stochastic:bool=True):
         action = np.stack((xpos,ypos,num),axis=-1).reshape(3)
         obs,reward,done,trunc,_ = env.step(action)
         steps+=1 ; r+=reward
-        #env.render()
-    
-        if trunc:
+        env.render()
+        if done:
             writter.add_scalar("reward_per_ep",r,global_step=n/HORIZON)
-            steps = 0 ; r = 0
-            obs = env.reset()[0]
-        elif done:
             print(f"\nSteps : {steps} | Rewards : {r:.2f} \n{obs}" )
-            sys.exit()
-
-
+            time.sleep(5)
+            steps = r = 0
+            obs = env.reset()[0]
+            
+        
 def test_random(rollout_num:int=None):
     writter = SummaryWriter(
-            f"test/random_policy_{rollout_num}_episodes_{datetime.now().strftime('%Y%m%d_%H%M%S')}_hor_{HORIZON}"
+            f"results/random_policy_{rollout_num}_episodes_{datetime.now().strftime('%Y%m%d_%H%M%S')}_hor_{HORIZON}"
     )
     env = envi()
     obs = env.reset()[0]
-    r = 0
-    steps = 0
+    steps = r = 0
 
     for n in tqdm(range(rollout_num),total=rollout_num):
         obs,reward,done,trunc,_ = env.step(env.action_space.sample())
         steps+=1 ; r+=reward
-        #env.render()
-    
-        if trunc:
+        env.render()
+        if done:
             writter.add_scalar("reward_per_ep",r,global_step=n/HORIZON)
-            steps = 0 ; r = 0
-            env.reset()
-        elif done:
             print(f"\nSteps : {steps} | Rewards : {r:.2f} \n{obs}" )
-            sys.exit()
+            time.sleep(5)
+            steps = r = 0
+            obs = env.reset()[0]
 
 
 def plot_attn_mask():
@@ -147,8 +141,7 @@ def plot_attn_mask():
     titles = ["Head 0: Row","Head 1: Column","Head 2: Region","Head 3: Global"]
 
     for i, (ax, title) in enumerate(zip(axes, titles)):
-        m = masks[i].float().cpu().numpy()
-        
+        m = masks[i].float().cpu().numpy() 
         im = ax.imshow(m, cmap="binary", interpolation="nearest")
         ax.set_title(title, fontsize=14)
         ax.set_xlabel("Key Position (0-80)", fontsize=10)
