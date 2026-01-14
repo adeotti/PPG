@@ -1,0 +1,6 @@
+gymnasium_sudoku==0.1.14
+#gymnasium_sudoku==0.2.23 for reset with random board
+gymnasium==1.2.2
+tensorboard==2.20.0
+torch==2.9.1
+tqdm==4.67.1
