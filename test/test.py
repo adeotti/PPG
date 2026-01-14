@@ -13,7 +13,13 @@ import time
 HORIZON = int(10e3)
 
 def envi():
-    x = gym.make("sudoku-v0",render_mode="human",horizon=HORIZON,eval_mode=False,render_delay=0.0)
+    x = gym.make(
+            "sudoku-v0",
+            render_mode="human",
+            horizon=HORIZON,
+            eval_mode=True,
+            render_delay=0.0
+        )
     return x 
 
 def process_obs(x): 
@@ -84,10 +90,6 @@ class p_net(nn.Module):
         box_mask = (boxes.unsqueeze(0) == boxes.unsqueeze(1)).float()
         global_mask = torch.ones(N, N)
         return torch.stack([row_mask,col_mask,box_mask,global_mask],dim=0)
-
-
-def backtracking():
-    pass
 
 
 def test_trained(rollout_num:int=None,stochastic:bool=True):
