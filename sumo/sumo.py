@@ -64,12 +64,6 @@ class p_net(nn.Module):
         self.c2 = nn.LazyConv2d(128,3,1,padding=1)
         self.c3 = nn.LazyConv2d(128,3,1,padding=1)
 
-        self.emb = nn.Parameter(torch.randn(1,81,128) * 0.02)
-        self.attn = nn.MultiheadAttention(128,4,batch_first=True)
-        
-        self.register_buffer("attn_mask",self.attn_masks())
-
-        self.norm = nn.LayerNorm(128)
         self.l1 = nn.LazyLinear(128)
         self.l2 = nn.LazyLinear(128)
  
@@ -83,15 +77,10 @@ class p_net(nn.Module):
         x = F.silu(self.c3(x))
         x = x.flatten(2).transpose(-1,1) # -> torch.Size([batch,81,128])
 
-        x = x + self.emb
-        attn_mask = self.attn_mask.unsqueeze(0).expand(x.size(0), -1, -1, -1).flatten(0,1)
-        x,_= self.attn(x,x,x,attn_mask=attn_mask,average_attn_weights=True)
-        x = self.norm(x)
         x = F.silu(self.l1(x))
         x = F.silu(self.l2(x))
                
         pre_pos = self.pos(x).squeeze(-1) # cell position block
-        pos = self.pos_mask(s,pre_pos)
         pos = F.softmax(pos,-1)
         dist_pos = Categorical(probs=pos)
         logi_pos = Categorical(logits=pre_pos)
